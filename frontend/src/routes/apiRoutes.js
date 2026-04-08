@@ -16,6 +16,8 @@ export const apiRoutes = {
   teacher: {
     register: '/api/teacher/register',
     skillRequests: '/api/teacher/skill-requests',
+    scheduleReviewSession: '/api/teacher/schedule-review-session',
+    startReviewSession: '/api/teacher/start-review-session',
     approveSkill: '/api/teacher/approve-skill',
     rejectSkill: '/api/teacher/reject-skill',
     swaps: '/api/teacher/swaps',

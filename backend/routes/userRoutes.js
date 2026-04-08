@@ -6,6 +6,7 @@ const User = require('../models/User'); // User model import karna zaroori hai
 const Message = require('../models/Message'); // Unread messages check karne ke liye
 const Session = require('../models/Session'); // Real-time sessions database map karne ke liye
 const Rating = require('../models/Rating'); // Rating model for session feedbacks
+const { normalizeSkillName } = require('../utils/skillHelpers');
 
 const multer = require('multer');
 const fs = require('fs');
@@ -55,9 +56,36 @@ router.get('/messages', userController.getMessages);
 router.post('/swapRequests', async (req, res) => {
     try {
         const { email, skillName, date, time, mentorEmail, mentorName } = req.body;
-        const user = await User.findOne({ email });
+        const [user, mentor] = await Promise.all([
+            User.findOne({ email }),
+            mentorEmail ? User.findOne({ email: mentorEmail }) : null
+        ]);
 
         if (!user) return res.status(404).json({ message: 'User not found' });
+        if (!mentor || mentor.role === 'Teacher Admin' || mentor.role === 'Main Admin' || mentor.role === 'Super Admin') {
+            return res.status(400).json({ message: 'Selected teacher is invalid.' });
+        }
+        if (!skillName || !date || !time || !mentorEmail) {
+            return res.status(400).json({ message: 'skillName, mentorEmail, date, and time are required.' });
+        }
+
+        const hasApprovedSkill = (mentor.skillsOffered || []).some(
+            (skill) => !skill.includes('[Pending Approval') && normalizeSkillName(skill).toLowerCase() === normalizeSkillName(skillName).toLowerCase()
+        );
+        if (!hasApprovedSkill) {
+            return res.status(400).json({ message: 'This skill is not approved yet, so users cannot book it.' });
+        }
+
+        const duplicateSession = await Session.findOne({
+            learnerEmail: email,
+            mentorEmail,
+            skill: skillName,
+            status: { $in: ['Pending', 'Scheduled', 'Active'] }
+        });
+        if (duplicateSession) {
+            return res.status(400).json({ message: 'You already have an active request for this skill with this teacher.' });
+        }
+
         if (user.credits < 1) return res.status(400).json({ message: 'Insufficient credits! You need at least 1 credit.' });
 
         user.credits -= 1;
@@ -69,8 +97,8 @@ router.post('/swapRequests', async (req, res) => {
                 learnerEmail: email,
                 learnerName: user.name,
                 mentorEmail: mentorEmail,
-                mentorName: mentorName || 'Community Mentor',
-                skill: skillName,
+                mentorName: mentorName || mentor.name || 'Community Mentor',
+                skill: normalizeSkillName(skillName),
                 date: date,
                 time: time
             });
@@ -147,11 +175,13 @@ router.put('/end-session', async (req, res) => {
                 endedAt: new Date()
             };
             await session.save();
-            // Award 1 credit to the mentor instantly
-            const teacher = await User.findOne({ email: session.mentorEmail });
-            if (teacher) {
-                teacher.credits = (teacher.credits !== undefined ? teacher.credits : 5) + 1;
-                await teacher.save();
+            // Award 1 credit to the mentor instantly for normal learning swaps only
+            if (session.sessionType !== 'skill-review') {
+                const teacher = await User.findOne({ email: session.mentorEmail });
+                if (teacher) {
+                    teacher.credits = (teacher.credits !== undefined ? teacher.credits : 5) + 1;
+                    await teacher.save();
+                }
             }
         }
         res.json({ message: 'Session ended successfully' });
@@ -421,6 +451,22 @@ router.post('/skills', upload.single('certificateFile'), async (req, res) => {
         if (type === 'offered') {
             user.skillsOffered = user.skillsOffered || [];
             user.skillsOffered.push(finalSkillString);
+
+            if (/\[Pending Approval:\s*.*Live Interaction/i.test(finalSkillString)) {
+                await Session.create({
+                    sessionType: 'skill-review',
+                    learnerEmail: user.email,
+                    learnerName: user.name,
+                    mentorName: 'Skill Review Admin',
+                    skill: `Skill Review: ${normalizeSkillName(finalSkillString)}`,
+                    date: new Date().toISOString(),
+                    time: 'To be scheduled',
+                    status: 'Pending',
+                    skillRequestProviderId: user._id,
+                    skillRequestProviderEmail: user.email,
+                    skillRequestRawSkill: finalSkillString
+                });
+            }
         } else {
             user.skillsWanted = user.skillsWanted || [];
             user.skillsWanted.push(finalSkillString);
@@ -444,13 +490,20 @@ router.get('/dashboard-data', async (req, res) => {
         const getRandColor = () => colors[Math.floor(Math.random() * colors.length)];
 
         // 1. Top Mentors (Real users from DB with good ratings)
-        const topMentorsDocs = await User.find({ rating: { $gte: 0 }, email: { $ne: email } })
+        const topMentorsDocs = await User.find({
+            rating: { $gte: 0 },
+            email: { $ne: email },
+            role: { $nin: ['Teacher Admin', 'Main Admin', 'Super Admin'] },
+        })
             .sort({ rating: -1, ratingCount: -1 })
-            .limit(3);
+            .limit(10);
 
-        const topMentors = topMentorsDocs.map(m => ({
+        const topMentors = topMentorsDocs
+        .filter(m => (m.skillsOffered || []).some(skill => !skill.includes('[Pending Approval')))
+        .slice(0, 3)
+        .map(m => ({
             name: m.name,
-            expertIn: m.skillsOffered && m.skillsOffered.length > 0 ? m.skillsOffered[0] : 'Community Mentor',
+            expertIn: (m.skillsOffered || []).find(skill => !skill.includes('[Pending Approval')) || 'Community Mentor',
             initials: m.name.substring(0, 2).toUpperCase(),
             avatarBg: getRandColor()
         }));
@@ -458,8 +511,13 @@ router.get('/dashboard-data', async (req, res) => {
         // 2. Recommended Matches (Real users wanting what you offer)
         let matchQuery = { email: { $ne: email } };
         if (user && user.skillsOffered && user.skillsOffered.length > 0) {
-            matchQuery.skillsWanted = { $in: user.skillsOffered };
+            matchQuery.skillsWanted = {
+                $in: user.skillsOffered
+                    .filter(skill => !skill.includes('[Pending Approval'))
+                    .map(skill => normalizeSkillName(skill))
+            };
         }
+        matchQuery.role = { $nin: ['Teacher Admin', 'Main Admin', 'Super Admin'] };
         const matchDocs = await User.find(matchQuery).limit(3);
         const recommendedMatches = matchDocs.map(m => ({
             name: m.name,
@@ -476,11 +534,13 @@ router.get('/dashboard-data', async (req, res) => {
         })) : [];
 
         // 4. Certificates (Derived from verified skills offered)
-        const certificates = (user && user.skillsOffered && user.skillsOffered.length > 0) ? user.skillsOffered.map(skill => ({
-            title: skill,
-            issuer: 'SkillSwap Verification',
-            date: new Date().toLocaleString('default', { month: 'short', year: 'numeric' })
-        })) : [];
+        const certificates = (user && user.skillsOffered && user.skillsOffered.length > 0) ? user.skillsOffered
+            .filter(skill => !skill.includes('[Pending Approval'))
+            .map(skill => ({
+                title: skill,
+                issuer: 'SkillSwap Verification',
+                date: new Date().toLocaleString('default', { month: 'short', year: 'numeric' })
+            })) : [];
 
         // 5. Scheduled Sessions (Learner & Teaching)
         const learnerSessionsDocs = await Session.find({ learnerEmail: email, status: { $in: ['Pending', 'Scheduled', 'Active'] } }).sort({ date: 1 });
@@ -493,10 +553,11 @@ router.get('/dashboard-data', async (req, res) => {
                 day: d.getDate().toString(),
                 month: d.toLocaleString('default', { month: 'short' }).toUpperCase(),
                 title: s.skill,
-                mentorName: s.mentorName,
+                mentorName: s.mentorName || 'Skill Review Admin',
                 mentorEmail: s.mentorEmail,
-                time: s.time,
-                status: s.status
+                time: s.time || 'To be scheduled',
+                status: s.status,
+                sessionType: s.sessionType || 'swap'
             };
         });
 
@@ -509,10 +570,23 @@ router.get('/dashboard-data', async (req, res) => {
                 title: s.skill,
                 studentName: s.learnerName,
                 studentEmail: s.learnerEmail,
-                time: s.time,
-                status: s.status
+                time: s.time || 'To be scheduled',
+                status: s.status,
+                sessionType: s.sessionType || 'swap'
             };
         });
+
+        const pendingSkillReviews = await Session.find({
+            learnerEmail: email,
+            sessionType: 'skill-review',
+            status: { $in: ['Pending', 'Scheduled', 'Active'] }
+        }).sort({ createdAt: -1 });
+
+        const reviewActivities = pendingSkillReviews.map((review) => ({
+            icon: review.status === 'Active' ? '🎥' : '🛡️',
+            title: `Skill review ${review.status.toLowerCase()}`,
+            desc: `${review.skill} • ${review.time || 'Awaiting admin schedule'}`
+        }));
 
         res.json({
             upcomingSessions,
@@ -525,7 +599,8 @@ router.get('/dashboard-data', async (req, res) => {
                 { title: 'Earn a 5-star rating', difficulty: 'Hard', colorClass: '#ef4444', bgClass: 'rgba(239, 68, 68, 0.2)' }
             ],
             recentActivities: [
-                { icon: '✅', title: 'System Active', desc: 'Real-time dashboard connected successfully.' }
+                { icon: '✅', title: 'System Active', desc: 'Real-time dashboard connected successfully.' },
+                ...reviewActivities
             ],
             recommendedMatches,
             studentReviews: [],

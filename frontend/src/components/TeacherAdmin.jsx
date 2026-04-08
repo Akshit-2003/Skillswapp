@@ -1,8 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { buildApiUrl } from '../api';
 import { apiRoutes } from '../routes/apiRoutes';
 import { clearStoredUser, getStoredUser } from '../utils/auth';
+
+const RTC_CONFIGURATION = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' }
+  ]
+};
 
 const PageContainer = ({ title, subtitle, children }) => (
   <div style={{ textAlign: 'left', animation: 'fadeInUp 0.5s ease-out', maxWidth: '1200px', margin: '0 auto', paddingBottom: '2rem' }}>
@@ -80,6 +87,23 @@ const TeacherAdmin = () => {
   const [showCertificateModal, setShowCertificateModal] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [userSearchTerm, setUserSearchTerm] = useState('');
+  const [reviewSchedule, setReviewSchedule] = useState({ date: '', time: '10:00 AM' });
+  const [callStatus, setCallStatus] = useState('Ready to connect');
+  const [isMicEnabled, setIsMicEnabled] = useState(true);
+  const [isCameraEnabled, setIsCameraEnabled] = useState(true);
+  const [hasRemoteMedia, setHasRemoteMedia] = useState(false);
+  const [isPreparingCall, setIsPreparingCall] = useState(false);
+  const [localMediaError, setLocalMediaError] = useState('');
+  const [sessionChat, setSessionChat] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const localStreamRef = useRef(null);
+  const remoteStreamRef = useRef(null);
+  const peerConnectionRef = useRef(null);
+  const processedSignalsRef = useRef({ offer: null, answer: null, candidates: new Set() });
+  const pendingIceCandidatesRef = useRef([]);
+  const callAttemptIdRef = useRef('');
 
   useEffect(() => {
     const parsedUser = getStoredUser();
@@ -92,6 +116,54 @@ const TeacherAdmin = () => {
       navigate('/admin/login');
     }
   }, [navigate]);
+
+  const getAdminUser = () => getStoredUser() || {};
+
+  const getReviewSession = () => selectedRequest?.reviewSession || null;
+
+  const attachVideoStreams = () => {
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = localStreamRef.current;
+      localVideoRef.current.play?.().catch(() => {});
+    }
+
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = remoteStreamRef.current;
+      remoteVideoRef.current.play?.().catch(() => {});
+    }
+  };
+
+  const cleanupCallResources = () => {
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.ontrack = null;
+      peerConnectionRef.current.onicecandidate = null;
+      peerConnectionRef.current.onconnectionstatechange = null;
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+    }
+
+    remoteStreamRef.current = null;
+    processedSignalsRef.current = { offer: null, answer: null, candidates: new Set() };
+    pendingIceCandidatesRef.current = [];
+    callAttemptIdRef.current = '';
+
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+
+    setHasRemoteMedia(false);
+    setIsPreparingCall(false);
+    setCallStatus('Ready to connect');
+    setIsMicEnabled(true);
+    setIsCameraEnabled(true);
+    setLocalMediaError('');
+    setSessionChat([]);
+    setChatInput('');
+  };
 
   const fetchData = async (isBackground = false) => {
     if (!isBackground) setLoading(true);
@@ -158,13 +230,159 @@ const TeacherAdmin = () => {
     return () => clearInterval(intervalId);
   }, []);
 
+  useEffect(() => {
+    const openReviewRequestId = location.state?.openReviewRequestId;
+    if (!openReviewRequestId || pendingRequests.length === 0) return;
+
+    const matchedRequest = pendingRequests.find((request) => request.requestId === openReviewRequestId);
+    if (matchedRequest) {
+      setSelectedRequest(matchedRequest);
+      setShowVideoModal(true);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, location.pathname, pendingRequests, navigate]);
+
+  const updateSelectedRequestSession = (reviewSession) => {
+    if (!selectedRequest) return;
+    setSelectedRequest((prev) => prev ? ({ ...prev, reviewSession }) : prev);
+  };
+
+  const closeVideoModal = () => {
+    cleanupCallResources();
+    setShowVideoModal(false);
+  };
+
+  const sendCallSignal = async (sessionId, type, fromEmail, toEmail, payload = null) => {
+    const response = await fetch(buildApiUrl('/api/user/session-call'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, type, fromEmail, toEmail, payload, attemptId: callAttemptIdRef.current })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to sync ${type} signal`);
+    }
+
+    const data = await response.json();
+    if (data?.call?.attemptId) {
+      callAttemptIdRef.current = data.call.attemptId;
+    }
+    return data;
+  };
+
+  const ensureLocalStream = async () => {
+    if (localStreamRef.current) return localStreamRef.current;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localStreamRef.current = stream;
+      setLocalMediaError('');
+      attachVideoStreams();
+      return stream;
+    } catch (error) {
+      console.error('Admin local media error:', error);
+      setLocalMediaError('Camera/microphone blocked. You can still receive the teacher stream.');
+      return null;
+    }
+  };
+
+  const createPeerConnection = async () => {
+    const reviewSession = getReviewSession();
+    if (!reviewSession || !selectedRequest) return null;
+
+    if (
+      peerConnectionRef.current &&
+      !['failed', 'closed', 'disconnected'].includes(peerConnectionRef.current.connectionState)
+    ) {
+      return peerConnectionRef.current;
+    }
+
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+
+    const stream = await ensureLocalStream();
+    const remoteStream = new MediaStream();
+    remoteStreamRef.current = remoteStream;
+
+    const peerConnection = new RTCPeerConnection(RTC_CONFIGURATION);
+
+    if (stream) {
+      stream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, stream);
+      });
+    } else {
+      peerConnection.addTransceiver('video', { direction: 'recvonly' });
+      peerConnection.addTransceiver('audio', { direction: 'recvonly' });
+    }
+
+    peerConnection.ontrack = (event) => {
+      const incomingTracks = event.streams?.[0]?.getTracks?.().length
+        ? event.streams[0].getTracks()
+        : [event.track];
+
+      incomingTracks.forEach(track => {
+        const alreadyAdded = remoteStream.getTracks().some(existingTrack => existingTrack.id === track.id);
+        if (!alreadyAdded) {
+          remoteStream.addTrack(track);
+        }
+      });
+      setHasRemoteMedia(true);
+      setCallStatus('Teacher connected');
+      attachVideoStreams();
+    };
+
+    peerConnection.onicecandidate = async (event) => {
+      if (!event.candidate) return;
+      try {
+        await sendCallSignal(reviewSession.id, 'ice-candidate', reviewSession.mentorEmail, selectedRequest.providerEmail, event.candidate.toJSON());
+      } catch (error) {
+        console.error('Admin ICE send error:', error);
+      }
+    };
+
+    peerConnection.onconnectionstatechange = () => {
+      const state = peerConnection.connectionState;
+      if (state === 'connected' || state === 'completed') setCallStatus('Connected & live');
+      if (state === 'connecting') setCallStatus('Connecting...');
+      if (state === 'failed' || state === 'disconnected') setCallStatus('Reconnecting...');
+      if (state === 'closed') setCallStatus('Review ended');
+    };
+
+    peerConnectionRef.current = peerConnection;
+    attachVideoStreams();
+    return peerConnection;
+  };
+
+  const flushPendingIceCandidates = async (peerConnection) => {
+    if (!peerConnection?.remoteDescription || pendingIceCandidatesRef.current.length === 0) return;
+
+    const queuedCandidates = [...pendingIceCandidatesRef.current];
+    pendingIceCandidatesRef.current = [];
+
+    for (const candidate of queuedCandidates) {
+      try {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (error) {
+        console.error('Admin queued ICE error:', error);
+      }
+    }
+  };
+
   const handleApprove = async (request) => {
+    const admin = getAdminUser();
     const url = buildApiUrl(apiRoutes.teacher.approveSkill);
     try {
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ providerId: request.providerId, skillName: request.skillName })
+        body: JSON.stringify({
+          providerId: request.providerId,
+          skillName: request.skillName,
+          adminEmail: admin.email,
+          adminName: admin.name
+        })
       });
 
       let data;
@@ -191,12 +409,18 @@ const TeacherAdmin = () => {
   };
 
   const handleReject = async (request) => {
+    const admin = getAdminUser();
     const url = buildApiUrl(apiRoutes.teacher.rejectSkill);
     try {
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ providerId: request.providerId, skillName: request.skillName })
+        body: JSON.stringify({
+          providerId: request.providerId,
+          skillName: request.skillName,
+          adminEmail: admin.email,
+          adminName: admin.name
+        })
       });
 
       let data;
@@ -222,10 +446,271 @@ const TeacherAdmin = () => {
     }
   };
 
+  const handleScheduleReview = async (request) => {
+    if (!reviewSchedule.date || !reviewSchedule.time) {
+      alert('Please select review date and time first.');
+      return;
+    }
+
+    const admin = getAdminUser();
+
+    try {
+      const response = await fetch(buildApiUrl(apiRoutes.teacher.scheduleReviewSession), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          providerId: request.providerId,
+          skillName: request.skillName,
+          date: reviewSchedule.date,
+          time: reviewSchedule.time,
+          adminEmail: admin.email,
+          adminName: admin.name
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        alert(data.message || data.error || 'Failed to schedule review');
+        return;
+      }
+
+      updateSelectedRequestSession(data.reviewSession);
+      alert('Review session scheduled. Teacher can now see it on their dashboard.');
+      fetchData(true);
+    } catch (error) {
+      console.error('Schedule review error:', error);
+      alert('Could not connect to backend while scheduling the review.');
+    }
+  };
+
+  const handleStartReview = async (request, openModal = false) => {
+    const admin = getAdminUser();
+
+    try {
+      const response = await fetch(buildApiUrl(apiRoutes.teacher.startReviewSession), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          providerId: request.providerId,
+          skillName: request.skillName,
+          adminEmail: admin.email,
+          adminName: admin.name
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        alert(data.message || data.error || 'Failed to start review session');
+        return null;
+      }
+
+      const nextRequest = { ...request, reviewSession: data.reviewSession };
+      setSelectedRequest(nextRequest);
+      if (openModal) setShowVideoModal(true);
+      fetchData(true);
+      return nextRequest;
+    } catch (error) {
+      console.error('Start review error:', error);
+      alert('Could not connect to backend while starting the review.');
+      return null;
+    }
+  };
+
+  const toggleMicrophone = () => {
+    if (!localStreamRef.current) return;
+    const nextValue = !isMicEnabled;
+    localStreamRef.current.getAudioTracks().forEach(track => {
+      track.enabled = nextValue;
+    });
+    setIsMicEnabled(nextValue);
+  };
+
+  const toggleCamera = () => {
+    if (!localStreamRef.current) return;
+    const nextValue = !isCameraEnabled;
+    localStreamRef.current.getVideoTracks().forEach(track => {
+      track.enabled = nextValue;
+    });
+    setIsCameraEnabled(nextValue);
+  };
+
+  const handleEndReview = async () => {
+    const reviewSession = getReviewSession();
+    if (!reviewSession) return;
+
+    try {
+      await fetch(buildApiUrl('/api/user/end-session'), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: reviewSession.id })
+      });
+      closeVideoModal();
+      fetchData(true);
+    } catch (error) {
+      console.error('End review error:', error);
+    }
+  };
+
+  const handleSendChat = async (event) => {
+    if (event.key !== 'Enter' || !chatInput.trim()) return;
+    const reviewSession = getReviewSession();
+    if (!reviewSession) return;
+
+    try {
+      await fetch(buildApiUrl('/api/user/session-chat'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: reviewSession.id,
+          sender: getAdminUser().name || 'Admin',
+          text: chatInput.trim()
+        })
+      });
+      setChatInput('');
+      const res = await fetch(buildApiUrl(`/api/user/session-chat/${reviewSession.id}`));
+      if (res.ok) {
+        setSessionChat(await res.json());
+      }
+    } catch (error) {
+      console.error('Admin chat error:', error);
+    }
+  };
+
   const handleLogout = () => {
     clearStoredUser();
     navigate('/admin/login');
   };
+
+  useEffect(() => {
+    if (!showVideoModal || !selectedRequest?.reviewSession?.id) return undefined;
+
+    let cancelled = false;
+
+    const initializeCall = async () => {
+      if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection) {
+        setCallStatus('Browser not supported');
+        return;
+      }
+
+      setIsPreparingCall(true);
+      setCallStatus('Starting review room...');
+
+      try {
+        await createPeerConnection();
+        if (!cancelled) {
+          setCallStatus('Waiting for teacher to join...');
+        }
+      } catch (error) {
+        console.error('Teacher admin video init error:', error);
+        setCallStatus('Unable to start review');
+      } finally {
+        if (!cancelled) setIsPreparingCall(false);
+      }
+    };
+
+    initializeCall();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showVideoModal, selectedRequest?.reviewSession?.id]);
+
+  useEffect(() => {
+    if (!showVideoModal || !selectedRequest?.reviewSession?.id || isPreparingCall) return undefined;
+
+    let disposed = false;
+
+    const pollSignals = async () => {
+      try {
+        const reviewSession = getReviewSession();
+        if (!reviewSession) return;
+
+        const res = await fetch(buildApiUrl(`/api/user/session-call/${reviewSession.id}?email=${encodeURIComponent(reviewSession.mentorEmail)}&t=${Date.now()}`), {
+          cache: 'no-store'
+        });
+        if (!res.ok || disposed) return;
+
+        const callState = await res.json();
+        if (callState.attemptId) callAttemptIdRef.current = callState.attemptId;
+
+        const peerConnection = await createPeerConnection();
+        if (!peerConnection || disposed) return;
+
+        if (
+          callState.offer &&
+          callState.offer.fromEmail === selectedRequest.providerEmail &&
+          processedSignalsRef.current.offer !== callState.offer.updatedAt
+        ) {
+          if (!peerConnection.remoteDescription) {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(callState.offer.payload));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            await sendCallSignal(reviewSession.id, 'answer', reviewSession.mentorEmail, selectedRequest.providerEmail, answer);
+            await flushPendingIceCandidates(peerConnection);
+          }
+          processedSignalsRef.current.offer = callState.offer.updatedAt;
+        }
+
+        if (callState.answer && processedSignalsRef.current.answer !== callState.answer.updatedAt) {
+          processedSignalsRef.current.answer = callState.answer.updatedAt;
+        }
+
+        if (Array.isArray(callState.iceCandidates)) {
+          for (const candidateEntry of callState.iceCandidates) {
+            const candidateKey = JSON.stringify(candidateEntry.candidate);
+            if (processedSignalsRef.current.candidates.has(candidateKey)) continue;
+
+            if (peerConnection.remoteDescription) {
+              await peerConnection.addIceCandidate(new RTCIceCandidate(candidateEntry.candidate));
+            } else {
+              pendingIceCandidatesRef.current.push(candidateEntry.candidate);
+            }
+            processedSignalsRef.current.candidates.add(candidateKey);
+          }
+        }
+      } catch (error) {
+        console.error('Teacher admin signal polling error:', error);
+      }
+    };
+
+    pollSignals();
+    const intervalId = setInterval(pollSignals, 2000);
+    return () => {
+      disposed = true;
+      clearInterval(intervalId);
+    };
+  }, [showVideoModal, selectedRequest?.reviewSession?.id, isPreparingCall]);
+
+  useEffect(() => {
+    if (!showVideoModal || !selectedRequest?.reviewSession?.id) return undefined;
+
+    const pollChat = async () => {
+      try {
+        const reviewSession = getReviewSession();
+        if (!reviewSession) return;
+        const res = await fetch(buildApiUrl(`/api/user/session-chat/${reviewSession.id}`));
+        if (res.ok) {
+          setSessionChat(await res.json());
+        }
+      } catch (error) {
+        console.error('Teacher admin chat polling error:', error);
+      }
+    };
+
+    pollChat();
+    const intervalId = setInterval(pollChat, 2000);
+    return () => clearInterval(intervalId);
+  }, [showVideoModal, selectedRequest?.reviewSession?.id]);
+
+  useEffect(() => () => {
+    cleanupCallResources();
+  }, []);
+
+  useEffect(() => {
+    if (!showVideoModal) {
+      cleanupCallResources();
+    }
+  }, [showVideoModal]);
 
   const handleReportRating = async (ratingId) => {
     try {
@@ -310,6 +795,7 @@ const TeacherAdmin = () => {
           {pendingRequests.map((request) => {
             const proofsMatch = request.rawSkill?.match(/\[Pending Approval:\s*(.*?)\]/i);
             const proofs = proofsMatch ? proofsMatch[1].split(',').map((item) => item.trim()) : [];
+            const requiresLiveReview = proofs.includes('Live Interaction');
 
             const certProof = proofs.find(p => p.startsWith('Certificate'));
             const hasCertificate = !!certProof;
@@ -337,13 +823,21 @@ const TeacherAdmin = () => {
                       </div>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                    <button onClick={() => handleApprove(request)} style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', border: 'none', color: '#fff', padding: '8px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
-                      Approve
-                    </button>
-                    <button onClick={() => handleReject(request)} style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#ef4444', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}>
-                      Reject
-                    </button>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px', minWidth: '260px' }}>
+                    {request.reviewSession && (
+                      <div style={{ fontSize: '0.82rem', color: '#93c5fd', background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.3)', padding: '8px 10px', borderRadius: '8px', textAlign: 'right' }}>
+                        Review: <strong>{request.reviewSession.status}</strong>
+                        <div>{request.reviewSession.date || 'TBD'} • {request.reviewSession.time || 'TBD'}</div>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      <button onClick={() => handleApprove(request)} disabled={requiresLiveReview && request.reviewSession?.status !== 'Active'} title={requiresLiveReview && request.reviewSession?.status !== 'Active' ? 'Start live review first' : ''} style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', border: 'none', color: '#fff', padding: '8px 20px', borderRadius: '8px', cursor: requiresLiveReview && request.reviewSession?.status !== 'Active' ? 'not-allowed' : 'pointer', fontWeight: 'bold', opacity: requiresLiveReview && request.reviewSession?.status !== 'Active' ? 0.55 : 1 }}>
+                        Approve
+                      </button>
+                      <button onClick={() => handleReject(request)} style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#ef4444', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}>
+                        Reject
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -356,15 +850,52 @@ const TeacherAdmin = () => {
                       </button>
                     )}
                     {proofs.includes('Live Interaction') && (
-                      <button onClick={() => { setSelectedRequest(request); setShowVideoModal(true); }} style={{ background: 'rgba(100, 108, 255, 0.2)', border: '1px solid rgba(100,108,255,0.4)', color: '#93c5fd', padding: '8px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem' }}>
-                        Start Video Test
-                      </button>
+                      <>
+                        <button
+                          onClick={() => {
+                            setSelectedRequest(request);
+                            setReviewSchedule({
+                              date: request.reviewSession?.date ? request.reviewSession.date.split('T')[0] : '',
+                              time: request.reviewSession?.time || '10:00 AM'
+                            });
+                          }}
+                          style={{ background: 'rgba(59,130,246,0.18)', border: '1px solid rgba(59,130,246,0.35)', color: '#bfdbfe', padding: '8px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem' }}
+                        >
+                          Review Controls
+                        </button>
+                        <button
+                          onClick={async () => {
+                            setSelectedRequest(request);
+                            const startedRequest = await handleStartReview(request, true);
+                            if (!startedRequest) setShowVideoModal(false);
+                          }}
+                          style={{ background: 'rgba(100, 108, 255, 0.2)', border: '1px solid rgba(100,108,255,0.4)', color: '#93c5fd', padding: '8px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem' }}
+                        >
+                          Start Video Test
+                        </button>
+                      </>
                     )}
                     {(proofs.includes('Basic Test') || proofs.includes('Assessment')) && (
                       <button onClick={() => { setSelectedRequest(request); setShowQuizModal(true); }} style={{ background: 'rgba(245, 158, 11, 0.2)', border: '1px solid rgba(245, 158, 11, 0.4)', color: '#fcd34d', padding: '8px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem' }}>
                         Send Quiz
                       </button>
                     )}
+                  </div>
+                )}
+
+                {selectedRequest?.requestId === request.requestId && proofs.includes('Live Interaction') && (
+                  <div style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: '10px', padding: '16px', display: 'flex', gap: '12px', alignItems: 'end', flexWrap: 'wrap' }}>
+                    <div style={{ minWidth: '180px', flex: 1 }}>
+                      <label style={{ display: 'block', color: '#d1d5db', fontSize: '0.85rem', marginBottom: '6px' }}>Review Date</label>
+                      <input type="date" value={reviewSchedule.date} onChange={(e) => setReviewSchedule((prev) => ({ ...prev, date: e.target.value }))} style={{ width: '100%', padding: '10px', background: '#111827', color: '#fff', border: '1px solid #374151', borderRadius: '8px' }} />
+                    </div>
+                    <div style={{ minWidth: '150px' }}>
+                      <label style={{ display: 'block', color: '#d1d5db', fontSize: '0.85rem', marginBottom: '6px' }}>Review Time</label>
+                      <input type="text" value={reviewSchedule.time} onChange={(e) => setReviewSchedule((prev) => ({ ...prev, time: e.target.value }))} placeholder="06:00 PM" style={{ width: '100%', padding: '10px', background: '#111827', color: '#fff', border: '1px solid #374151', borderRadius: '8px' }} />
+                    </div>
+                    <button onClick={() => handleScheduleReview(request)} style={{ background: '#2563eb', border: 'none', color: '#fff', padding: '10px 16px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}>
+                      Schedule Review
+                    </button>
                   </div>
                 )}
               </div>
@@ -378,30 +909,74 @@ const TeacherAdmin = () => {
           <div style={{ background: '#1f2937', padding: '30px', borderRadius: '16px', width: '95vw', height: '95vh', border: '1px solid #374151', display: 'flex', flexDirection: 'column', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
               <h3 style={{ margin: 0, color: '#fff', fontSize: '1.5rem', display: 'flex', alignItems: 'center', gap: '10px' }}>🔴 Live Video Interaction</h3>
-              <button onClick={() => setShowVideoModal(false)} style={{ background: 'transparent', color: '#ef4444', border: 'none', fontSize: '1.5rem', cursor: 'pointer', padding: '0 10px' }}>✖</button>
+              <button onClick={closeVideoModal} style={{ background: 'transparent', color: '#ef4444', border: 'none', fontSize: '1.5rem', cursor: 'pointer', padding: '0 10px' }}>✖</button>
             </div>
-            <p style={{ margin: '0 0 20px 0', color: '#9ca3af', fontSize: '1rem' }}>
-              Testing <strong style={{ color: '#fff' }}>{selectedRequest?.skillName}</strong> skills for {selectedRequest?.providerName}.
-            </p>
-
-            <div style={{ flex: 1, background: '#000', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', margin: '10px 0', border: '2px solid #374151', color: '#646cff', position: 'relative' }}>
-              <span style={{ fontSize: '4rem', marginBottom: '1rem' }}>📹</span>
-              <span style={{ fontSize: '1.2rem', animation: 'pulse 2s infinite' }}>Waiting for user to join...</span>
+            <div style={{ margin: '0 0 20px 0', display: 'flex', gap: '15px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ background: 'rgba(100,108,255,0.15)', border: '1px solid rgba(100,108,255,0.3)', color: '#93c5fd', padding: '6px 12px', borderRadius: '8px', fontSize: '0.95rem' }}>Skill: <strong style={{ color: '#fff' }}>{selectedRequest?.skillName}</strong></span>
+              <span style={{ background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.3)', color: '#6ee7b7', padding: '6px 12px', borderRadius: '8px', fontSize: '0.95rem' }}>Teacher: <strong style={{ color: '#fff' }}>{selectedRequest?.providerName}</strong></span>
+              <span style={{ color: hasRemoteMedia ? '#6ee7b7' : '#fbbf24', fontSize: '0.9rem', marginLeft: 'auto' }}>{isPreparingCall ? 'Preparing devices...' : callStatus}</span>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #374151' }}>
-              <div style={{ color: '#ef4444', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.1rem' }}>
-                <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#ef4444', display: 'inline-block', animation: 'pulse 1.5s infinite' }}></span>
-                10:00 Remaining
+            <div style={{ flex: 1, display: 'flex', gap: '20px', overflow: 'hidden' }}>
+              <div style={{ flex: 2, background: '#000', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', border: '2px solid #374151', position: 'relative', overflow: 'hidden' }}>
+                <video ref={remoteVideoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', display: hasRemoteMedia ? 'block' : 'none' }} />
+                {!hasRemoteMedia && (
+                  <>
+                    <span style={{ fontSize: '4rem', marginBottom: '1rem' }}>📹</span>
+                    <span style={{ fontSize: '1.2rem', color: '#93c5fd', animation: 'pulse 2s infinite' }}>{callStatus}</span>
+                  </>
+                )}
+                <div style={{ position: 'absolute', bottom: '20px', left: '20px', background: 'rgba(0,0,0,0.8)', padding: '8px 15px', borderRadius: '8px', color: '#fff', border: '1px solid #374151' }}>
+                  Teacher: <strong>{selectedRequest?.providerName}</strong>
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: '15px' }}>
-                <button onClick={() => setShowVideoModal(false)} style={{ background: 'transparent', color: '#d1d5db', border: '1px solid #374151', padding: '12px 24px', borderRadius: '8px', cursor: 'pointer', fontSize: '1rem' }}>
-                  Cancel
-                </button>
-                <button onClick={() => handleApprove(selectedRequest)} style={{ background: '#10b981', color: '#fff', border: 'none', padding: '12px 24px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>
-                  Pass and Approve
-                </button>
+
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div style={{ flex: 1, background: '#111827', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #374151', position: 'relative', overflow: 'hidden' }}>
+                  <video ref={localVideoRef} autoPlay muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: isCameraEnabled ? 1 : 0.25 }} />
+                  {localMediaError && (
+                    <div style={{ position: 'absolute', inset: 'auto 12px 12px 12px', background: 'rgba(0,0,0,0.75)', color: '#fbbf24', padding: '8px 10px', borderRadius: '8px', fontSize: '0.8rem', border: '1px solid rgba(251,191,36,0.25)' }}>
+                      {localMediaError}
+                    </div>
+                  )}
+                  {!isCameraEnabled && <span style={{ position: 'absolute', fontSize: '2rem' }}>📷 Off</span>}
+                  <div style={{ position: 'absolute', bottom: '10px', left: '10px', background: 'rgba(0,0,0,0.8)', padding: '5px 10px', borderRadius: '6px', color: '#fff', fontSize: '0.85rem', border: '1px solid #374151' }}>
+                    Admin (You)
+                  </div>
+                </div>
+
+                <div style={{ flex: 2, background: '#111827', borderRadius: '12px', border: '1px solid #374151', padding: '15px', display: 'flex', flexDirection: 'column' }}>
+                  <h4 style={{ marginTop: 0, color: '#e5e7eb', borderBottom: '1px solid #374151', paddingBottom: '10px' }}>Review Chat</h4>
+                  <div style={{ flex: 1, overflowY: 'auto', marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '5px' }}>
+                    <div style={{ alignSelf: 'center', color: '#10b981', padding: '4px 0', fontSize: '0.85rem', fontStyle: 'italic', textAlign: 'center' }}>Ask practical questions and verify the teacher live.</div>
+                    {sessionChat.map((msg, i) => (
+                      <div key={i} style={{ alignSelf: msg.sender === (getAdminUser().name || 'Admin') ? 'flex-end' : 'flex-start', background: msg.sender === (getAdminUser().name || 'Admin') ? '#646cff' : '#374151', color: '#fff', padding: '8px 12px', borderRadius: '12px', fontSize: '0.9rem', maxWidth: '85%' }}>
+                        {msg.sender !== (getAdminUser().name || 'Admin') && <strong style={{ display: 'block', fontSize: '0.75rem', marginBottom: '2px', color: '#aaa' }}>{msg.sender}</strong>}
+                        {msg.text}
+                      </div>
+                    ))}
+                  </div>
+                  <input type="text" placeholder="Type a message and press Enter..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={handleSendChat} style={{ width: '100%', boxSizing: 'border-box', padding: '12px', borderRadius: '8px', border: '1px solid #374151', background: '#1f2937', color: '#fff', outline: 'none' }} />
+                </div>
               </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #374151', gap: '12px', flexWrap: 'wrap' }}>
+              <button onClick={toggleMicrophone} disabled={!localStreamRef.current} style={{ background: isMicEnabled ? '#374151' : '#7f1d1d', color: '#fff', border: 'none', padding: '15px 20px', borderRadius: '8px', cursor: localStreamRef.current ? 'pointer' : 'not-allowed', fontWeight: 'bold', fontSize: '1rem', opacity: localStreamRef.current ? 1 : 0.55 }}>
+                {isMicEnabled ? 'Mute Mic' : 'Unmute Mic'}
+              </button>
+              <button onClick={toggleCamera} disabled={!localStreamRef.current} style={{ background: isCameraEnabled ? '#374151' : '#7f1d1d', color: '#fff', border: 'none', padding: '15px 20px', borderRadius: '8px', cursor: localStreamRef.current ? 'pointer' : 'not-allowed', fontWeight: 'bold', fontSize: '1rem', opacity: localStreamRef.current ? 1 : 0.55 }}>
+                {isCameraEnabled ? 'Turn Off Camera' : 'Turn On Camera'}
+              </button>
+              <button onClick={() => handleApprove(selectedRequest)} style={{ background: '#10b981', color: '#fff', border: 'none', padding: '15px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>
+                Approve Skill
+              </button>
+              <button onClick={() => handleReject(selectedRequest)} style={{ background: '#b91c1c', color: '#fff', border: 'none', padding: '15px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>
+                Reject Skill
+              </button>
+              <button onClick={handleEndReview} style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '15px 30px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1.1rem' }}>
+                End Review
+              </button>
             </div>
           </div>
         </div>

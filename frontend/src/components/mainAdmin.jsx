@@ -316,6 +316,7 @@ const SuperAdmin = () => {
   const [allSkills, setAllSkills] = useState([]);
   const [allTeachers, setAllTeachers] = useState([]);
   const [verifierApps, setVerifierApps] = useState([]);
+  const [skillApprovalRequests, setSkillApprovalRequests] = useState([]);
   const [allSessions, setAllSessions] = useState([]);
   const [allRatings, setAllRatings] = useState([]);
   const [allTickets, setAllTickets] = useState([]);
@@ -380,6 +381,9 @@ const SuperAdmin = () => {
   const [selectedVerifierApp, setSelectedVerifierApp] = useState(null);
   const [isVerifierProofChecked, setIsVerifierProofChecked] = useState(false);
   const [showDocumentPreview, setShowDocumentPreview] = useState(false);
+  const [selectedSkillApproval, setSelectedSkillApproval] = useState(null);
+  const [showSkillApprovalModal, setShowSkillApprovalModal] = useState(false);
+  const [skillReviewSchedule, setSkillReviewSchedule] = useState({ date: '', time: '06:00 PM' });
 
   // Mock Data for Chart
   const userGrowthData = [20, 35, 45, 50, 65, 75, 85, 90, 80, 95];
@@ -399,12 +403,13 @@ const SuperAdmin = () => {
   const fetchData = async (isBackground = false) => {
     if (!isBackground) setLoading(true);
     try {
-      const [usersRes, statsRes, skillsRes, teachersRes, verifierRes, sessionsRes, ratingsRes, ticketsRes, logsRes, announcementsRes, reportsRes] = await Promise.all([
+      const [usersRes, statsRes, skillsRes, teachersRes, verifierRes, skillRequestsRes, sessionsRes, ratingsRes, ticketsRes, logsRes, announcementsRes, reportsRes] = await Promise.all([
         fetch(buildApiUrl('/api/admin/users')),
         fetch(buildApiUrl('/api/admin/stats')),
         fetch(buildApiUrl(apiRoutes.platform.skills)),
         fetch(buildApiUrl('/api/admin/teachers')),
         fetch(buildApiUrl('/api/verifier/applications')),
+        fetch(buildApiUrl(apiRoutes.teacher.skillRequests)),
         fetch(buildApiUrl('/api/admin/sessions')),
         fetch(buildApiUrl('/api/admin/ratings')),
         fetch(buildApiUrl('/api/admin/tickets')),
@@ -427,6 +432,9 @@ const SuperAdmin = () => {
 
       const verifierData = await verifierRes.json();
       if (verifierRes.ok) setVerifierApps(Array.isArray(verifierData) ? verifierData : []);
+
+      const skillRequestsData = await skillRequestsRes.json();
+      if (skillRequestsRes.ok) setSkillApprovalRequests(Array.isArray(skillRequestsData) ? skillRequestsData : []);
 
       if (sessionsRes.ok) setAllSessions(await sessionsRes.json());
       if (ratingsRes.ok) setAllRatings(await ratingsRes.json());
@@ -626,6 +634,118 @@ const SuperAdmin = () => {
       }
     } catch (error) {
       console.error('Error updating app:', error);
+    }
+  };
+
+  const handleReviewSkillApproval = (request) => {
+    setSelectedSkillApproval(request);
+    setSkillReviewSchedule({
+      date: request.reviewSession?.date ? request.reviewSession.date.split('T')[0] : '',
+      time: request.reviewSession?.time || '06:00 PM',
+    });
+    setShowSkillApprovalModal(true);
+  };
+
+  const handleScheduleSkillReview = async () => {
+    if (!selectedSkillApproval) return;
+    if (!skillReviewSchedule.date || !skillReviewSchedule.time) {
+      alert('Please choose review date and time.');
+      return;
+    }
+
+    const admin = getStoredUser();
+
+    try {
+      const response = await fetch(buildApiUrl(apiRoutes.teacher.scheduleReviewSession), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          providerId: selectedSkillApproval.providerId,
+          skillName: selectedSkillApproval.skillName,
+          date: skillReviewSchedule.date,
+          time: skillReviewSchedule.time,
+          adminEmail: admin?.email,
+          adminName: admin?.name,
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        alert(data.message || data.error || 'Failed to schedule skill review.');
+        return;
+      }
+      alert('Review scheduled successfully. Teacher has been notified.');
+      setSelectedSkillApproval((prev) => prev ? ({ ...prev, reviewSession: data.reviewSession }) : prev);
+      fetchData(true);
+    } catch (error) {
+      console.error('Schedule skill review error:', error);
+      alert('Could not connect to backend while scheduling review.');
+    }
+  };
+
+  const handleStartSkillReview = async (request = selectedSkillApproval, openRoom = false) => {
+    if (!request) return;
+    const admin = getStoredUser();
+
+    try {
+      const response = await fetch(buildApiUrl(apiRoutes.teacher.startReviewSession), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          providerId: request.providerId,
+          skillName: request.skillName,
+          adminEmail: admin?.email,
+          adminName: admin?.name,
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        alert(data.message || data.error || 'Failed to start skill review.');
+        return;
+      }
+
+      const nextRequest = { ...request, reviewSession: data.reviewSession };
+      setSelectedSkillApproval(nextRequest);
+      fetchData(true);
+
+      if (openRoom) {
+        navigate('/admin/verifications', { state: { openReviewRequestId: request.requestId } });
+      } else {
+        alert('Video interaction started. Teacher has been notified to join.');
+      }
+    } catch (error) {
+      console.error('Start skill review error:', error);
+      alert('Could not connect to backend while starting review.');
+    }
+  };
+
+  const handleSkillApprovalDecision = async (status) => {
+    if (!selectedSkillApproval) return;
+    const admin = getStoredUser();
+    const endpoint = status === 'Approved' ? apiRoutes.teacher.approveSkill : apiRoutes.teacher.rejectSkill;
+
+    try {
+      const response = await fetch(buildApiUrl(endpoint), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          providerId: selectedSkillApproval.providerId,
+          skillName: selectedSkillApproval.skillName,
+          adminEmail: admin?.email,
+          adminName: admin?.name,
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        alert(data.message || data.error || `Failed to ${status.toLowerCase()} skill.`);
+        return;
+      }
+      alert(data.message || `Skill ${status.toLowerCase()} successfully.`);
+      setShowSkillApprovalModal(false);
+      setSelectedSkillApproval(null);
+      fetchData();
+    } catch (error) {
+      console.error('Skill approval decision error:', error);
+      alert('Could not connect to backend while updating skill approval.');
     }
   };
 
@@ -901,6 +1021,10 @@ const SuperAdmin = () => {
   const renderVerifierApplicationsPage = () => (
     <div style={{ animation: 'fadeInUp 0.5s ease' }}>
       <h2 style={{ color: '#e5e7eb', marginBottom: '1.5rem' }}>Verifier Applications</h2>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+        <StatCard title="Verifier Requests" value={verifierApps.length} icon="🛡️" color="#10b981" />
+        <StatCard title="Skill Approval Requests" value={skillApprovalRequests.length} icon="🎥" color="#f59e0b" />
+      </div>
       <div style={{ background: '#1f2937', borderRadius: '12px', overflow: 'hidden', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', color: '#d1d5db' }}>
           <thead>
@@ -928,6 +1052,46 @@ const SuperAdmin = () => {
               </tr>
             ))}
             {verifierApps.length === 0 && <tr><td colSpan="5" style={{ padding: '24px', textAlign: 'center', color: '#9ca3af' }}>No pending applications found.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <h2 style={{ color: '#e5e7eb', margin: '2rem 0 1.5rem' }}>Teacher Skill Approval Requests</h2>
+      <div style={{ background: '#1f2937', borderRadius: '12px', overflow: 'hidden', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', color: '#d1d5db' }}>
+          <thead>
+            <tr style={{ background: 'rgba(255,255,255,0.05)', borderBottom: '1px solid #374151' }}>
+              <th style={{ padding: '16px' }}>Teacher</th>
+              <th style={{ padding: '16px' }}>Skill</th>
+              <th style={{ padding: '16px' }}>Review Status</th>
+              <th style={{ padding: '16px' }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {skillApprovalRequests.map((request) => (
+              <tr key={request.requestId} style={{ borderBottom: '1px solid #374151' }}>
+                <td style={{ padding: '16px' }}>
+                  <strong style={{ display: 'block', color: '#fff' }}>{request.providerName}</strong>
+                  <small style={{ color: '#9ca3af' }}>{request.providerEmail}</small>
+                </td>
+                <td style={{ padding: '16px' }}>{request.skillName}</td>
+                <td style={{ padding: '16px' }}>
+                  <span style={{ padding: '4px 10px', background: request.reviewSession?.status === 'Active' ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)', color: request.reviewSession?.status === 'Active' ? '#10b981' : '#f59e0b', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '700' }}>
+                    {request.reviewSession?.status || 'Pending Review'}
+                  </span>
+                  <div style={{ color: '#9ca3af', fontSize: '0.8rem', marginTop: '6px' }}>
+                    {request.reviewSession?.date ? `${request.reviewSession.date} • ${request.reviewSession.time}` : 'Not scheduled yet'}
+                  </div>
+                </td>
+                <td style={{ padding: '16px' }}>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button onClick={() => handleReviewSkillApproval(request)} style={{ background: 'rgba(59,130,246,0.12)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.35)', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>Manage</button>
+                    <button onClick={() => handleStartSkillReview(request, true)} style={{ background: 'rgba(16,185,129,0.14)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.35)', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>Open Room</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {skillApprovalRequests.length === 0 && <tr><td colSpan="4" style={{ padding: '24px', textAlign: 'center', color: '#9ca3af' }}>No skill approval requests found.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -1610,6 +1774,54 @@ const SuperAdmin = () => {
                   }}>
                   Verify & Approve
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showSkillApprovalModal && selectedSkillApproval && (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, animation: 'fadeIn 0.2s ease' }}>
+            <div style={{ background: '#1f2937', padding: '30px', borderRadius: '12px', width: '620px', maxWidth: '92vw', border: '1px solid #374151', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', borderBottom: '1px solid #374151', paddingBottom: '1rem' }}>
+                <div>
+                  <h3 style={{ margin: 0, color: '#fff' }}>Manage Skill Approval</h3>
+                  <p style={{ margin: '6px 0 0 0', color: '#9ca3af', fontSize: '0.9rem' }}>{selectedSkillApproval.providerName} • {selectedSkillApproval.skillName}</p>
+                </div>
+                <button onClick={() => setShowSkillApprovalModal(false)} style={{ background: 'transparent', border: 'none', color: '#ef4444', fontSize: '1.2rem', cursor: 'pointer' }}>✖</button>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.2rem' }}>
+                <div style={{ background: '#111827', padding: '14px', borderRadius: '10px', border: '1px solid #374151' }}>
+                  <p style={{ margin: '0 0 4px 0', color: '#9ca3af', fontSize: '0.82rem' }}>Teacher Email</p>
+                  <p style={{ margin: 0, color: '#fff', fontWeight: '600' }}>{selectedSkillApproval.providerEmail}</p>
+                </div>
+                <div style={{ background: '#111827', padding: '14px', borderRadius: '10px', border: '1px solid #374151' }}>
+                  <p style={{ margin: '0 0 4px 0', color: '#9ca3af', fontSize: '0.82rem' }}>Current Review Status</p>
+                  <p style={{ margin: 0, color: '#fff', fontWeight: '600' }}>{selectedSkillApproval.reviewSession?.status || 'Pending Review'}</p>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+                <div>
+                  <label style={{ display: 'block', color: '#9ca3af', marginBottom: '8px', fontSize: '0.9rem' }}>Schedule Date</label>
+                  <input type="date" value={skillReviewSchedule.date} onChange={(e) => setSkillReviewSchedule((prev) => ({ ...prev, date: e.target.value }))} style={{ width: '100%', padding: '10px', borderRadius: '8px', background: '#111827', border: '1px solid #374151', color: '#fff' }} />
+                </div>
+                <div>
+                  <label style={{ display: 'block', color: '#9ca3af', marginBottom: '8px', fontSize: '0.9rem' }}>Schedule Time</label>
+                  <input type="text" value={skillReviewSchedule.time} onChange={(e) => setSkillReviewSchedule((prev) => ({ ...prev, time: e.target.value }))} placeholder="06:00 PM" style={{ width: '100%', padding: '10px', borderRadius: '8px', background: '#111827', border: '1px solid #374151', color: '#fff' }} />
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '1.5rem' }}>
+                <button onClick={handleScheduleSkillReview} style={{ padding: '10px 16px', background: '#2563eb', border: 'none', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>Schedule Review</button>
+                <button onClick={() => handleStartSkillReview(selectedSkillApproval)} style={{ padding: '10px 16px', background: '#10b981', border: 'none', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>Start Video Interaction</button>
+                <button onClick={() => handleStartSkillReview(selectedSkillApproval, true)} style={{ padding: '10px 16px', background: 'rgba(255,255,255,0.08)', border: '1px solid #374151', color: '#d1d5db', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}>Start & Open Review Room</button>
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', borderTop: '1px solid #374151', paddingTop: '1.5rem' }}>
+                <button onClick={() => setShowSkillApprovalModal(false)} style={{ padding: '10px 20px', background: 'transparent', border: '1px solid #374151', color: '#d1d5db', borderRadius: '6px', cursor: 'pointer' }}>Close</button>
+                <button onClick={() => handleSkillApprovalDecision('Rejected')} style={{ padding: '10px 20px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#ef4444', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>Reject</button>
+                <button onClick={() => handleSkillApprovalDecision('Approved')} style={{ padding: '10px 20px', background: '#10b981', border: 'none', color: '#fff', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>Approve</button>
               </div>
             </div>
           </div>

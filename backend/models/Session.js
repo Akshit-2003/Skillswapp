@@ -17,14 +17,21 @@ const iceCandidateSchema = new mongoose.Schema({
 });
 
 const sessionSchema = new mongoose.Schema({
+    sessionType: { type: String, default: 'swap' },
     learnerEmail: { type: String, required: true },
     learnerName: { type: String, required: true },
-    mentorEmail: { type: String, required: true },
-    mentorName: { type: String, required: true },
+    mentorEmail: { type: String, default: '' },
+    mentorName: { type: String, default: '' },
     skill: { type: String, required: true },
-    date: { type: String, required: true },
-    time: { type: String, required: true },
+    date: { type: String, default: '' },
+    time: { type: String, default: '' },
     status: { type: String, default: 'Pending' },
+    skillRequestProviderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    skillRequestProviderEmail: { type: String, default: '' },
+    skillRequestRawSkill: { type: String, default: '' },
+    scheduledByEmail: { type: String, default: '' },
+    scheduledByName: { type: String, default: '' },
+    reviewCompletedAt: { type: Date, default: null },
     chat: [{
         sender: String,
         text: String,

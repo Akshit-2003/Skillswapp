@@ -1,22 +1,29 @@
 const express = require('express');
 const User = require('../models/User');
+const { normalizeSkillName } = require('../utils/skillHelpers');
 
 const router = express.Router();
 
 router.get('/skills', async (_req, res) => {
   try {
-    const usersWithSkills = await User.find({ 'skillsOffered.0': { $exists: true } });
+    const usersWithSkills = await User.find({
+      'skillsOffered.0': { $exists: true },
+      role: { $nin: ['Teacher Admin', 'Main Admin', 'Super Admin'] },
+    });
     const allSkills = usersWithSkills.flatMap((user) =>
-      user.skillsOffered.map((skill) => ({
+      user.skillsOffered
+      .filter((skill) => !skill.includes('[Pending Approval'))
+      .map((skill) => ({
         skillId: `${user._id}-${skill.replace(/\s+/g, '-')}`,
-        skillName: skill,
+        skillName: normalizeSkillName(skill),
         skill,
         providerName: user.name,
         name: user.name,
         providerEmail: user.email,
         email: user.email,
         providerId: user._id,
-        status: skill.includes('[Pending Approval') ? 'Pending' : 'Verified',
+        role: user.role,
+        status: 'Verified',
       })),
     );
 

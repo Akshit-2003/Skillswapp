@@ -52,8 +52,7 @@ export const FindSkills = () => {
           const data = await response.json();
           // Assuming data is an array of { name: "User Name", skill: "Skill String", ... }
           if (Array.isArray(data)) {
-            // Filter out Teacher Admin, Main Admin, and Super Admin from the user-facing skills list
-            const validData = data.filter(item => item.role !== 'Teacher Admin' && item.role !== 'Main Admin' && item.role !== 'Super Admin');
+            const validData = data.filter(item => item.status === 'Verified');
 
             const globalSkills = validData.map((item, index) => {
               // Parse the skill string format: "Name (Proficiency) [Proof...]"
@@ -195,6 +194,11 @@ export const FindSkills = () => {
             <button className="btn-primary" style={{ width: '100%' }} onClick={() => { setSelectedSwapSkill(skill); setShowSwapModal(true); }}>Request Swap</button>
           </div>
         ))}
+        {filteredSkills.length === 0 && (
+          <div className="card" style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '2rem', color: '#aaa' }}>
+            No approved skills available right now.
+          </div>
+        )}
       </div>
 
       {/* Schedule Swap Modal */}
@@ -295,7 +299,7 @@ export const MySkills = () => {
               user.skillsOffered.map((skill, idx) => (
                 <li key={idx}>
                   <span>{skill}</span>
-                  <span style={{ fontSize: '0.8rem', color: '#10b981' }}>Active</span>
+                  <span style={{ fontSize: '0.8rem', color: skill.includes('[Pending Approval') ? '#f59e0b' : '#10b981' }}>{skill.includes('[Pending Approval') ? 'Pending Approval' : 'Active'}</span>
                 </li>
               ))
             ) : (

@@ -11,6 +11,9 @@ const RTC_CONFIGURATION = {
   ]
 };
 
+const isSkillReviewSession = (session) => session?.sessionType === 'skill-review';
+const getApprovedSkills = (skills = []) => skills.filter((skill) => !skill.includes('[Pending Approval'));
+
 const StatCounter = ({ end, duration = 2000, suffix = "" }) => {
   const [count, setCount] = useState(0);
 
@@ -137,12 +140,14 @@ const Dashboard = () => {
       if (!sessionStillActive) {
         // Session is no longer active in DB (meaning the other person ended it)
         setShowVideoModal(false);
-        if (viewMode === 'learning') {
+        if (viewMode === 'learning' && !isSkillReviewSession(activeSession)) {
           setRatingSession(activeSession);
           setRatingValue(0);
           setRatingComment('');
           setShowRatingModal(true);
           alert("The mentor has ended the class. Please rate your session.");
+        } else if (isSkillReviewSession(activeSession)) {
+          alert("The admin review session has ended.");
         } else {
           alert("The learner has ended the class. You earned 1 credit!");
         }
@@ -716,11 +721,13 @@ const Dashboard = () => {
       setShowVideoModal(false);
       window.dispatchEvent(new Event('user_updated')); // fetch updated credits
 
-      if (viewMode === 'learning') {
+      if (viewMode === 'learning' && !isSkillReviewSession(sessionToRate)) {
         setRatingSession(sessionToRate);
         setRatingValue(0);
         setRatingComment('');
         setShowRatingModal(true);
+      } else if (isSkillReviewSession(sessionToRate)) {
+        alert('Review session completed.');
       } else {
         alert('Session completed! You earned 1 credit.');
       }
@@ -881,12 +888,14 @@ const Dashboard = () => {
                     </div>
                     <div className="session-details">
                       <strong>{session.title}</strong>
-                      <small>with {session.mentorName} • {session.time}</small>
+                      <small>{isSkillReviewSession(session) ? `Admin review with ${session.mentorName || 'Skill Review Admin'} • ${session.time}` : `with ${session.mentorName} • ${session.time}`}</small>
                     </div>
                     {session.status === 'Pending' ? (
-                      <span style={{ fontSize: '0.8rem', color: '#f59e0b', padding: '5px 10px', background: 'rgba(245, 158, 11, 0.1)', borderRadius: '6px' }}>Pending Approval</span>
+                      <span style={{ fontSize: '0.8rem', color: '#f59e0b', padding: '5px 10px', background: 'rgba(245, 158, 11, 0.1)', borderRadius: '6px' }}>{isSkillReviewSession(session) ? 'Admin assignment pending' : 'Pending Approval'}</span>
+                    ) : session.status === 'Scheduled' && isSkillReviewSession(session) ? (
+                      <button className="btn-primary" style={{ padding: '5px 10px', fontSize: '0.8rem', background: '#2563eb', border: 'none' }} onClick={() => handleJoinVideo(session, true)}>Join Review</button>
                     ) : (
-                      <button className="btn-primary" style={{ padding: '5px 10px', fontSize: '0.8rem', background: '#10b981', border: 'none' }} onClick={() => handleJoinVideo(session, true)}>🎥 Join Video</button>
+                      <button className="btn-primary" style={{ padding: '5px 10px', fontSize: '0.8rem', background: '#10b981', border: 'none' }} onClick={() => handleJoinVideo(session, true)}>{isSkillReviewSession(session) ? 'Join Live Review' : '🎥 Join Video'}</button>
                     )}
                   </div>
                 )) : (
@@ -937,7 +946,7 @@ const Dashboard = () => {
           {/* Teaching Stats */}
           <div className="dashboard-stats">
             <div className="stat-card">
-              <h4><StatCounter end={user.skillsOffered?.length || 0} /></h4>
+              <h4><StatCounter end={getApprovedSkills(user.skillsOffered).length || 0} /></h4>
               <p>Skills Offered</p>
             </div>
             <div className="stat-card">
@@ -959,7 +968,12 @@ const Dashboard = () => {
               <h3>Skills I Can Teach</h3>
               <ul className="skill-list">
                 {user.skillsOffered && user.skillsOffered.map((skill, index) => (
-                  <li key={index}>{skill}</li>
+                  <li key={index}>
+                    <span>{skill}</span>
+                    <span style={{ fontSize: '0.8rem', color: skill.includes('[Pending Approval') ? '#f59e0b' : '#10b981' }}>
+                      {skill.includes('[Pending Approval') ? 'Pending Approval' : 'Approved'}
+                    </span>
+                  </li>
                 ))}
                 {(!user.skillsOffered || user.skillsOffered.length === 0) && (
                   <li style={{ justifyContent: 'center', color: '#aaa' }}>No skills offered yet.</li>
@@ -1190,12 +1204,12 @@ const Dashboard = () => {
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.95)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', animation: 'fadeIn 0.2s ease-out' }}>
           <div style={{ background: '#1f2937', padding: '30px', borderRadius: '16px', width: '95vw', height: '95vh', border: '1px solid #374151', display: 'flex', flexDirection: 'column', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-              <h3 style={{ margin: 0, color: '#fff', fontSize: '1.5rem', display: 'flex', alignItems: 'center', gap: '10px' }}>🔴 Live Class: {activeSession?.title}</h3>
+              <h3 style={{ margin: 0, color: '#fff', fontSize: '1.5rem', display: 'flex', alignItems: 'center', gap: '10px' }}>{isSkillReviewSession(activeSession) ? `🔴 Live Skill Review: ${activeSession?.title}` : `🔴 Live Class: ${activeSession?.title}`}</h3>
               <button onClick={closeVideoModal} style={{ background: 'transparent', color: '#ef4444', border: 'none', fontSize: '1.5rem', cursor: 'pointer', padding: '0 10px' }}>✖</button>
             </div>
             <div style={{ margin: '0 0 20px 0', display: 'flex', gap: '15px', alignItems: 'center', flexWrap: 'wrap' }}>
-              <span style={{ background: 'rgba(100,108,255,0.15)', border: '1px solid rgba(100,108,255,0.3)', color: '#93c5fd', padding: '6px 12px', borderRadius: '8px', fontSize: '0.95rem' }}>👑 Host (Teacher): <strong style={{ color: '#fff' }}>{activeSession?.mentorName}</strong></span>
-              <span style={{ background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.3)', color: '#6ee7b7', padding: '6px 12px', borderRadius: '8px', fontSize: '0.95rem' }}>🎓 Learner: <strong style={{ color: '#fff' }}>{activeSession?.studentName || user.name}</strong></span>
+              <span style={{ background: 'rgba(100,108,255,0.15)', border: '1px solid rgba(100,108,255,0.3)', color: '#93c5fd', padding: '6px 12px', borderRadius: '8px', fontSize: '0.95rem' }}>{isSkillReviewSession(activeSession) ? <>🛡️ Admin: <strong style={{ color: '#fff' }}>{activeSession?.mentorName}</strong></> : <>👑 Host (Teacher): <strong style={{ color: '#fff' }}>{activeSession?.mentorName}</strong></>}</span>
+              <span style={{ background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.3)', color: '#6ee7b7', padding: '6px 12px', borderRadius: '8px', fontSize: '0.95rem' }}>{isSkillReviewSession(activeSession) ? <>👨‍🏫 Teacher: <strong style={{ color: '#fff' }}>{activeSession?.studentName || user.name}</strong></> : <>🎓 Learner: <strong style={{ color: '#fff' }}>{activeSession?.studentName || user.name}</strong></>}</span>
               <span style={{ color: hasRemoteMedia ? '#6ee7b7' : '#fbbf24', fontSize: '0.9rem', marginLeft: 'auto' }}>{isPreparingCall ? 'Preparing devices...' : callStatus}</span>
             </div>
 
@@ -1214,9 +1228,9 @@ const Dashboard = () => {
                     <span style={{ fontSize: '1.2rem', color: '#10b981', animation: 'pulse 2s infinite' }}>{callStatus}</span>
                   </>
                 )}
-                <div style={{ position: 'absolute', bottom: '20px', left: '20px', background: 'rgba(0,0,0,0.8)', padding: '8px 15px', borderRadius: '8px', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px', border: '1px solid #374151' }}>
-                  {viewMode === 'learning' ? <><span style={{fontSize:'1.2rem'}}>👑</span> <span>Host: <strong>{activeSession?.mentorName}</strong></span></> : <><span style={{fontSize:'1.2rem'}}>🎓</span> <span>Learner: <strong>{activeSession?.studentName || 'Student'}</strong></span></>}
-                </div>
+                  <div style={{ position: 'absolute', bottom: '20px', left: '20px', background: 'rgba(0,0,0,0.8)', padding: '8px 15px', borderRadius: '8px', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px', border: '1px solid #374151' }}>
+                  {isSkillReviewSession(activeSession) ? <><span style={{fontSize:'1.2rem'}}>🛡️</span> <span>Admin: <strong>{activeSession?.mentorName}</strong></span></> : viewMode === 'learning' ? <><span style={{fontSize:'1.2rem'}}>👑</span> <span>Host: <strong>{activeSession?.mentorName}</strong></span></> : <><span style={{fontSize:'1.2rem'}}>🎓</span> <span>Learner: <strong>{activeSession?.studentName || 'Student'}</strong></span></>}
+                  </div>
               </div>
 
               {/* Sidebar (My Video & Chat) */}
@@ -1236,13 +1250,13 @@ const Dashboard = () => {
                   )}
                   {!isCameraEnabled && <span style={{ position: 'absolute', fontSize: '2rem' }}>📷 Off</span>}
                   <div style={{ position: 'absolute', bottom: '10px', left: '10px', background: 'rgba(0,0,0,0.8)', padding: '5px 10px', borderRadius: '6px', color: '#fff', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px', border: '1px solid #374151' }}>
-                    {viewMode === 'learning' ? <><span style={{fontSize:'1rem'}}>🎓</span> <span>Learner (You)</span></> : <><span style={{fontSize:'1rem'}}>👑</span> <span>Host (You)</span></>}
+                    {isSkillReviewSession(activeSession) ? <><span style={{fontSize:'1rem'}}>👨‍🏫</span> <span>Teacher (You)</span></> : viewMode === 'learning' ? <><span style={{fontSize:'1rem'}}>🎓</span> <span>Learner (You)</span></> : <><span style={{fontSize:'1rem'}}>👑</span> <span>Host (You)</span></>}
                   </div>
                 </div>
                 <div style={{ flex: 2, background: '#111827', borderRadius: '12px', border: '1px solid #374151', padding: '15px', display: 'flex', flexDirection: 'column' }}>
                   <h4 style={{ marginTop: 0, color: '#e5e7eb', borderBottom: '1px solid #374151', paddingBottom: '10px' }}>Class Chat</h4>
                   <div style={{ flex: 1, overflowY: 'auto', marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '5px' }}>
-                    <div style={{ alignSelf: 'center', color: '#10b981', padding: '4px 0', fontSize: '0.85rem', fontStyle: 'italic', textAlign: 'center' }}>Welcome to the live class! You can chat here.</div>
+                    <div style={{ alignSelf: 'center', color: '#10b981', padding: '4px 0', fontSize: '0.85rem', fontStyle: 'italic', textAlign: 'center' }}>{isSkillReviewSession(activeSession) ? 'Admin review is live. Use chat for follow-up questions.' : 'Welcome to the live class! You can chat here.'}</div>
                     {classChat.map((msg, i) => (
                       <div key={i} style={{ 
                         alignSelf: msg.sender === user.name ? 'flex-end' : 'flex-start', 
@@ -1271,7 +1285,7 @@ const Dashboard = () => {
                 {isCameraEnabled ? 'Turn Off Camera' : 'Turn On Camera'}
               </button>
               <button onClick={handleEndVideo} style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '15px 30px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                📞 End Class
+                {isSkillReviewSession(activeSession) ? 'End Review' : '📞 End Class'}
               </button>
             </div>
           </div>
