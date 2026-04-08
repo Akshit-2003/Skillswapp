@@ -1,14 +1,38 @@
-import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { buildApiUrl } from '../api';
 import { apiRoutes } from '../routes/apiRoutes';
 import { getStoredUser, storeUser } from '../utils/auth';
 
-const RTC_CONFIGURATION = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' }
-  ]
+const ThemeToggle = () => {
+  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'dark');
+
+  useEffect(() => {
+    document.body.className = theme === 'light' ? 'light-mode' : '';
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  return (
+    <button 
+      onClick={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')} 
+      style={{
+        background: theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', 
+        border: theme === 'dark' ? '1px solid rgba(255,255,255,0.2)' : '1px solid rgba(0,0,0,0.1)', 
+        color: theme === 'dark' ? '#fff' : '#333', 
+        padding: '8px 16px', 
+        borderRadius: '20px', 
+        cursor: 'pointer', 
+        display: 'flex', 
+        alignItems: 'center', 
+        gap: '8px', 
+        fontSize: '0.9rem',
+        fontWeight: 'bold',
+        transition: 'all 0.2s ease'
+      }}
+    >
+      {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
+    </button>
+  );
 };
 
 const isSkillReviewSession = (session) => session?.sessionType === 'skill-review';
@@ -75,23 +99,8 @@ const Dashboard = () => {
     learningJourney: [],
     certificates: []
   });
-  const [callStatus, setCallStatus] = useState('Ready to connect');
-  const [isMicEnabled, setIsMicEnabled] = useState(true);
-  const [isCameraEnabled, setIsCameraEnabled] = useState(true);
-  const [hasRemoteMedia, setHasRemoteMedia] = useState(false);
-  const [isPreparingCall, setIsPreparingCall] = useState(false);
-  const [localMediaError, setLocalMediaError] = useState('');
-  const localVideoRef = useRef(null);
-  const remoteVideoRef = useRef(null);
-  const localStreamRef = useRef(null);
-  const remoteStreamRef = useRef(null);
-  const peerConnectionRef = useRef(null);
-  const processedSignalsRef = useRef({ offer: null, answer: null, candidates: new Set() });
-  const pendingIceCandidatesRef = useRef([]);
-  const callAttemptIdRef = useRef('');
   const navigate = useNavigate();
   const location = useLocation();
-  const currentUserEmail = user?.email || '';
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -154,217 +163,6 @@ const Dashboard = () => {
       }
     }
   }, [dashData, showVideoModal, activeSession, viewMode]);
-
-  const getSessionParticipants = (session) => {
-    if (!session || !user) {
-      return { currentEmail: '', otherEmail: '', isLearner: false };
-    }
-
-    const currentEmail = (user.email || '').trim().toLowerCase();
-    const mentorEmail = (session.mentorEmail || '').trim().toLowerCase();
-    const learnerEmail = (session.studentEmail || session.learnerEmail || '').trim().toLowerCase();
-    const isLearner = currentEmail === learnerEmail || (currentEmail !== mentorEmail && !!mentorEmail);
-
-    return {
-      currentEmail,
-      otherEmail: isLearner ? mentorEmail : learnerEmail,
-      isLearner
-    };
-  };
-
-  const attachVideoStreams = () => {
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = localStreamRef.current;
-      localVideoRef.current.play?.().catch(() => {});
-    }
-
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = remoteStreamRef.current;
-      remoteVideoRef.current.play?.().catch(() => {});
-    }
-  };
-
-  const cleanupCallResources = () => {
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.ontrack = null;
-      peerConnectionRef.current.onicecandidate = null;
-      peerConnectionRef.current.onconnectionstatechange = null;
-      peerConnectionRef.current.close();
-      peerConnectionRef.current = null;
-    }
-
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => track.stop());
-      localStreamRef.current = null;
-    }
-
-    remoteStreamRef.current = null;
-    processedSignalsRef.current = { offer: null, answer: null, candidates: new Set() };
-    pendingIceCandidatesRef.current = [];
-    callAttemptIdRef.current = '';
-
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = null;
-    }
-
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = null;
-    }
-
-    setHasRemoteMedia(false);
-    setIsPreparingCall(false);
-    setCallStatus('Ready to connect');
-    setIsMicEnabled(true);
-    setIsCameraEnabled(true);
-    setLocalMediaError('');
-  };
-
-  const sendCallSignal = async (sessionId, type, fromEmail, toEmail, payload = null) => {
-    const response = await fetch(buildApiUrl('/api/user/session-call'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId, type, fromEmail, toEmail, payload, attemptId: callAttemptIdRef.current })
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      throw new Error(errorText || `Failed to sync ${type} signal`);
-    }
-
-    const data = await response.json().catch(() => null);
-    if (data?.call?.attemptId) {
-      callAttemptIdRef.current = data.call.attemptId;
-    }
-    return data;
-  };
-
-  const ensureLocalStream = async () => {
-    if (localStreamRef.current) {
-      return localStreamRef.current;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      localStreamRef.current = stream;
-      setLocalMediaError('');
-      attachVideoStreams();
-      return stream;
-    } catch (error) {
-      console.error('Local media access error:', error);
-      setLocalMediaError('Your camera/microphone is blocked. You can still receive the other person.');
-      return null;
-    }
-  };
-
-  const createPeerConnection = async (session) => {
-    if (
-      peerConnectionRef.current &&
-      !['failed', 'closed', 'disconnected'].includes(peerConnectionRef.current.connectionState)
-    ) {
-      return peerConnectionRef.current;
-    }
-
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.ontrack = null;
-      peerConnectionRef.current.onicecandidate = null;
-      peerConnectionRef.current.onconnectionstatechange = null;
-      peerConnectionRef.current.close();
-      peerConnectionRef.current = null;
-    }
-
-    const { currentEmail, otherEmail } = getSessionParticipants(session);
-    const stream = await ensureLocalStream();
-    const remoteStream = new MediaStream();
-    remoteStreamRef.current = remoteStream;
-
-    const peerConnection = new RTCPeerConnection(RTC_CONFIGURATION);
-
-    if (stream) {
-      stream.getTracks().forEach(track => {
-        peerConnection.addTrack(track, stream);
-      });
-    } else {
-      peerConnection.addTransceiver('video', { direction: 'recvonly' });
-      peerConnection.addTransceiver('audio', { direction: 'recvonly' });
-    }
-
-    peerConnection.ontrack = (event) => {
-      const incomingTracks = event.streams?.[0]?.getTracks?.().length
-        ? event.streams[0].getTracks()
-        : [event.track];
-
-      incomingTracks.forEach(track => {
-        const alreadyAdded = remoteStream.getTracks().some(existingTrack => existingTrack.id === track.id);
-        if (!alreadyAdded) {
-          remoteStream.addTrack(track);
-        }
-      });
-      setHasRemoteMedia(true);
-      setCallStatus('Connected & Active');
-      attachVideoStreams();
-    };
-
-    peerConnection.onicecandidate = async (event) => {
-      if (!event.candidate) return;
-
-      try {
-        await sendCallSignal(session.id, 'ice-candidate', currentEmail, otherEmail, event.candidate.toJSON());
-      } catch (error) {
-        console.error('ICE candidate send error:', error);
-      }
-    };
-
-    peerConnection.onconnectionstatechange = () => {
-      const state = peerConnection.connectionState;
-
-      if (state === 'connected') {
-        setCallStatus('Connected & Active');
-      } else if (state === 'completed') {
-        setCallStatus('Connected & Active');
-      } else if (state === 'connecting') {
-        setCallStatus('Connecting...');
-      } else if (state === 'failed' || state === 'disconnected') {
-        setCallStatus('Reconnecting...');
-      } else if (state === 'closed') {
-        setCallStatus('Call ended');
-      }
-    };
-
-    peerConnectionRef.current = peerConnection;
-    attachVideoStreams();
-    return peerConnection;
-  };
-
-  const flushPendingIceCandidates = async (peerConnection) => {
-    if (!peerConnection?.remoteDescription || pendingIceCandidatesRef.current.length === 0) {
-      return;
-    }
-
-    const queuedCandidates = [...pendingIceCandidatesRef.current];
-    pendingIceCandidatesRef.current = [];
-
-    for (const candidate of queuedCandidates) {
-      try {
-        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (error) {
-        console.error('Queued ICE candidate error:', error);
-      }
-    }
-  };
-
-  const createAndSendOffer = async (session) => {
-    const { currentEmail, otherEmail } = getSessionParticipants(session);
-    const peerConnection = await createPeerConnection(session);
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    await sendCallSignal(session.id, 'offer', currentEmail, otherEmail, offer);
-    setCallStatus('Calling...');
-  };
-
-  const closeVideoModal = () => {
-    cleanupCallResources();
-    setShowVideoModal(false);
-  };
 
   const handleOpenModal = (type) => {
     setModalType(type);
@@ -500,155 +298,6 @@ const Dashboard = () => {
     setShowVideoModal(true);
   };
 
-  useEffect(() => {
-    if (!showVideoModal || !activeSession || !user || isPreparingCall) {
-      return undefined;
-    }
-
-    let cancelled = false;
-
-    const initializeCall = async () => {
-      if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection) {
-        alert('This browser does not support in-app video calling.');
-        setCallStatus('Browser not supported');
-        return;
-      }
-
-      setIsPreparingCall(true);
-      setCallStatus('Starting camera and microphone...');
-
-      try {
-        await createPeerConnection(activeSession);
-
-        if (cancelled) return;
-
-        const { isLearner, currentEmail, otherEmail } = getSessionParticipants(activeSession);
-
-        if (isLearner) {
-          await createAndSendOffer(activeSession);
-        } else {
-          setCallStatus('Waiting for learner media...');
-        }
-      } catch (error) {
-        console.error('Video call init error:', error);
-        setCallStatus('Unable to start call');
-        alert('Unable to start the live call. Please try again.');
-      } finally {
-        if (!cancelled) {
-          setIsPreparingCall(false);
-        }
-      }
-    };
-
-    initializeCall();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [showVideoModal, activeSession?.id, currentUserEmail]);
-
-  useEffect(() => {
-    if (!showVideoModal || !activeSession || !user || isPreparingCall) {
-      return undefined;
-    }
-
-    let disposed = false;
-
-    const pollSignals = async () => {
-      try {
-        const res = await fetch(buildApiUrl(`/api/user/session-call/${activeSession.id}?email=${encodeURIComponent(user.email)}&t=${Date.now()}`), {
-          cache: 'no-store'
-        });
-        if (!res.ok || disposed) return;
-
-        const callState = await res.json();
-        if (callState.attemptId) {
-          callAttemptIdRef.current = callState.attemptId;
-        }
-        const peerConnection = await createPeerConnection(activeSession);
-        if (disposed) return;
-
-        const { currentEmail, otherEmail, isLearner } = getSessionParticipants(activeSession);
-
-        if (
-          callState.attemptId === callAttemptIdRef.current &&
-          callState.offer &&
-          callState.offer.fromEmail === otherEmail &&
-          processedSignalsRef.current.offer !== callState.offer.updatedAt
-        ) {
-          if (!peerConnection.remoteDescription) {
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(callState.offer.payload));
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
-            await flushPendingIceCandidates(peerConnection);
-            await sendCallSignal(activeSession.id, 'answer', currentEmail, otherEmail, answer);
-            processedSignalsRef.current.offer = callState.offer.updatedAt;
-            setCallStatus('Joining call...');
-          }
-        }
-
-        if (
-          callState.attemptId === callAttemptIdRef.current &&
-          callState.answer &&
-          callState.answer.fromEmail === otherEmail &&
-          processedSignalsRef.current.answer !== callState.answer.updatedAt
-        ) {
-          if (!peerConnection.remoteDescription) {
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(callState.answer.payload));
-            await flushPendingIceCandidates(peerConnection);
-            processedSignalsRef.current.answer = callState.answer.updatedAt;
-            setCallStatus('Connected & Active');
-          }
-        }
-
-        for (const candidateItem of callState.iceCandidates || []) {
-          if (
-            (!candidateItem.attemptId || candidateItem.attemptId === callAttemptIdRef.current) &&
-            candidateItem.fromEmail === otherEmail &&
-            !processedSignalsRef.current.candidates.has(candidateItem._id)
-          ) {
-            processedSignalsRef.current.candidates.add(candidateItem._id);
-            if (peerConnection.remoteDescription) {
-              await peerConnection.addIceCandidate(new RTCIceCandidate(candidateItem.candidate));
-            } else {
-              pendingIceCandidatesRef.current.push(candidateItem.candidate);
-            }
-          }
-        }
-
-        if (
-          isLearner &&
-          callState.attemptId === callAttemptIdRef.current &&
-          !callState.offer &&
-          !peerConnection.localDescription &&
-          !isPreparingCall
-        ) {
-          await createAndSendOffer(activeSession);
-        }
-      } catch (error) {
-        console.error('Signal polling error:', error);
-      }
-    };
-
-    pollSignals();
-    const intervalId = setInterval(pollSignals, 500);
-
-    return () => {
-      disposed = true;
-      clearInterval(intervalId);
-    };
-  }, [showVideoModal, activeSession?.id, currentUserEmail, isPreparingCall]);
-
-  useEffect(() => () => {
-    cleanupCallResources();
-  }, []);
-
-  useEffect(() => {
-    if (!showVideoModal) {
-      cleanupCallResources();
-    }
-  }, [showVideoModal]);
-
   // Real-time Live Chat Sync (every 2 seconds while modal is open)
   useEffect(() => {
     let chatInterval;
@@ -687,37 +336,14 @@ const Dashboard = () => {
     }
   };
 
-  const toggleMicrophone = () => {
-    if (!localStreamRef.current) return;
-
-    const nextValue = !isMicEnabled;
-    localStreamRef.current.getAudioTracks().forEach(track => {
-      track.enabled = nextValue;
-    });
-    setIsMicEnabled(nextValue);
-  };
-
-  const toggleCamera = () => {
-    if (!localStreamRef.current) return;
-
-    const nextValue = !isCameraEnabled;
-    localStreamRef.current.getVideoTracks().forEach(track => {
-      track.enabled = nextValue;
-    });
-    setIsCameraEnabled(nextValue);
-  };
-
   const handleEndVideo = async () => {
     if (!activeSession) return;
-    const sessionToRate = activeSession;
-
     try {
       await fetch(buildApiUrl('/api/user/end-session'), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: activeSession.id })
       });
-      cleanupCallResources();
       setShowVideoModal(false);
       window.dispatchEvent(new Event('user_updated')); // fetch updated credits
 
@@ -789,25 +415,28 @@ const Dashboard = () => {
           <h2>Welcome back, <span style={{ color: '#646cff' }}>{user.name}</span>! 👋</h2>
           <p style={{ opacity: 0.7 }}>Here's what's happening with your skills today.</p>
         </div>
-        <div className="view-toggle">
-          <button 
-            className={viewMode === 'learning' ? 'active' : ''} 
-            onClick={() => setViewMode('learning')}
-          >
-            Learning
-          </button>
-          <button 
-            className={viewMode === 'teaching' ? 'active' : ''} 
-            onClick={() => setViewMode('teaching')}
-          >
-            Teaching
-          </button>
-          <button 
-            className={viewMode === 'certificates' ? 'active' : ''} 
-            onClick={() => setViewMode('certificates')}
-          >
-            Certificates
-          </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+          <ThemeToggle />
+          <div className="view-toggle">
+            <button 
+              className={viewMode === 'learning' ? 'active' : ''} 
+              onClick={() => setViewMode('learning')}
+            >
+              Learning
+            </button>
+            <button 
+              className={viewMode === 'teaching' ? 'active' : ''} 
+              onClick={() => setViewMode('teaching')}
+            >
+              Teaching
+            </button>
+            <button 
+              className={viewMode === 'certificates' ? 'active' : ''} 
+              onClick={() => setViewMode('certificates')}
+            >
+              Certificates
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1235,20 +864,8 @@ const Dashboard = () => {
 
               {/* Sidebar (My Video & Chat) */}
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ flex: 1, background: '#111827', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #374151', position: 'relative', overflow: 'hidden' }}>
-                  <video
-                    ref={localVideoRef}
-                    autoPlay
-                    muted
-                    playsInline
-                    style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: isCameraEnabled ? 1 : 0.25 }}
-                  />
-                  {localMediaError && (
-                    <div style={{ position: 'absolute', inset: 'auto 12px 12px 12px', background: 'rgba(0,0,0,0.75)', color: '#fbbf24', padding: '8px 10px', borderRadius: '8px', fontSize: '0.8rem', lineHeight: '1.35', border: '1px solid rgba(251,191,36,0.25)' }}>
-                      {localMediaError}
-                    </div>
-                  )}
-                  {!isCameraEnabled && <span style={{ position: 'absolute', fontSize: '2rem' }}>📷 Off</span>}
+                <div style={{ flex: 1, background: '#111827', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #374151', position: 'relative' }}>
+                  <span style={{ fontSize: '2rem' }}>🧑‍💻</span>
                   <div style={{ position: 'absolute', bottom: '10px', left: '10px', background: 'rgba(0,0,0,0.8)', padding: '5px 10px', borderRadius: '6px', color: '#fff', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px', border: '1px solid #374151' }}>
                     {isSkillReviewSession(activeSession) ? <><span style={{fontSize:'1rem'}}>👨‍🏫</span> <span>Teacher (You)</span></> : viewMode === 'learning' ? <><span style={{fontSize:'1rem'}}>🎓</span> <span>Learner (You)</span></> : <><span style={{fontSize:'1rem'}}>👑</span> <span>Host (You)</span></>}
                   </div>
@@ -1277,13 +894,7 @@ const Dashboard = () => {
               </div>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #374151', gap: '12px', flexWrap: 'wrap' }}>
-              <button onClick={toggleMicrophone} disabled={!localStreamRef.current} style={{ background: isMicEnabled ? '#374151' : '#7f1d1d', color: '#fff', border: 'none', padding: '15px 20px', borderRadius: '8px', cursor: localStreamRef.current ? 'pointer' : 'not-allowed', fontWeight: 'bold', fontSize: '1rem', opacity: localStreamRef.current ? 1 : 0.55 }}>
-                {isMicEnabled ? 'Mute Mic' : 'Unmute Mic'}
-              </button>
-              <button onClick={toggleCamera} disabled={!localStreamRef.current} style={{ background: isCameraEnabled ? '#374151' : '#7f1d1d', color: '#fff', border: 'none', padding: '15px 20px', borderRadius: '8px', cursor: localStreamRef.current ? 'pointer' : 'not-allowed', fontWeight: 'bold', fontSize: '1rem', opacity: localStreamRef.current ? 1 : 0.55 }}>
-                {isCameraEnabled ? 'Turn Off Camera' : 'Turn On Camera'}
-              </button>
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #374151' }}>
               <button onClick={handleEndVideo} style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '15px 30px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
                 {isSkillReviewSession(activeSession) ? 'End Review' : '📞 End Class'}
               </button>

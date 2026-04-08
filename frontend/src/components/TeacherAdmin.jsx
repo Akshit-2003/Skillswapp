@@ -3,6 +3,38 @@ import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-r
 import { buildApiUrl } from '../api';
 import { apiRoutes } from '../routes/apiRoutes';
 import { clearStoredUser, getStoredUser } from '../utils/auth';
+import { Messages } from './DashboardPages';
+
+const ThemeToggle = () => {
+  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'dark');
+
+  useEffect(() => {
+    document.body.className = theme === 'light' ? 'light-mode' : '';
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  return (
+    <button
+      onClick={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
+      style={{
+        background: theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+        border: theme === 'dark' ? '1px solid rgba(255,255,255,0.2)' : '1px solid rgba(0,0,0,0.1)',
+        color: theme === 'dark' ? '#fff' : '#333',
+        padding: '6px 12px',
+        borderRadius: '20px',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        fontSize: '0.85rem',
+        fontWeight: 'bold',
+        transition: 'all 0.2s ease'
+      }}
+    >
+      {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
+    </button>
+  );
+};
 
 const RTC_CONFIGURATION = {
   iceServers: [
@@ -1237,13 +1269,14 @@ const TeacherAdmin = () => {
       {/* Left Sidebar */}
       <div className="admin-sidebar" style={{ width: '260px', background: '#1f2937', borderRight: '1px solid rgba(255,255,255,0.05)', display: 'flex', flexDirection: 'column', position: 'fixed', height: '100%', zIndex: 10, overflowY: 'auto' }}>
         <div style={{ padding: '24px', display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-          <span style={{ fontSize: '1.8rem' }}>🎓</span>
+          <img src="/vite.svg" alt="Logo" width="32" />
           <span style={{ fontSize: '1.25rem', fontWeight: '700', color: '#fff' }}>Moderator</span>
         </div>
         <div style={{ flex: 1, padding: '10px 0', display: 'flex', flexDirection: 'column', gap: '2px' }}>
           <p style={{ padding: '0 20px', fontSize: '0.75rem', textTransform: 'uppercase', color: '#6b7280', fontWeight: '600', marginBottom: '8px', letterSpacing: '0.5px' }}>Menu</p>
           <SidebarItem to="/admin/overview" label="Dashboard" icon="📊" active={location.pathname.endsWith('/overview') || location.pathname.endsWith('/admin')} />
           <SidebarItem to="/admin/verifications" label="Skill Approvals" icon="✅" active={location.pathname.includes('/verifications')} badgeCount={pendingRequests.length} />
+          <SidebarItem to="/admin/messages" label="Messages" icon="💬" active={location.pathname.includes('/messages')} />
           <SidebarItem to="/admin/swaps" label="Monitor Swaps" icon="🔄" active={location.pathname.includes('/swaps')} />
 
           <p style={{ padding: '0 20px', fontSize: '0.75rem', textTransform: 'uppercase', color: '#6b7280', fontWeight: '600', margin: '20px 0 8px', letterSpacing: '0.5px' }}>Quality Control</p>
@@ -1267,6 +1300,7 @@ const TeacherAdmin = () => {
         <div style={{ height: '70px', background: '#1f2937', borderBottom: '1px solid rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 30px', position: 'sticky', top: 0, zIndex: 5 }}>
           <h2 style={{ color: '#e5e7eb', fontSize: '1.1rem', margin: 0, fontWeight: '600' }}>Teacher & Moderator Portal</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+            <ThemeToggle />
             <div style={{ textAlign: 'right' }}>
               <p style={{ margin: 0, fontSize: '0.85rem', color: '#fff', fontWeight: 'bold' }}>Moderator Account</p>
               <p style={{ margin: 0, fontSize: '0.75rem', color: '#10b981' }}>Active & Online</p>
@@ -1290,6 +1324,7 @@ const TeacherAdmin = () => {
               <Route path="users" element={renderUserLookupPage()} />
               <Route path="guidelines" element={renderModerationRulesPage()} />
               <Route path="reports" element={renderAdminReportsPage()} />
+              <Route path="messages" element={<Messages />} />
             </Routes>
           )}
         </div>

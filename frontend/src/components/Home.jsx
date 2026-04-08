@@ -273,7 +273,7 @@ const Home = () => {
             <div className="footer-col">
               <h4>Connect With Us</h4>
               <div className="social-links">
-                <a href="#" className="social-icon">🐦</a>
+                <a href="" className="social-icon">🐦</a>
                 <a href="#" className="social-icon">💼</a>
                 <a href="#" className="social-icon">📸</a>
                 <a href="#" className="social-icon">🐙</a>

@@ -4,6 +4,184 @@ import { buildApiUrl } from '../api';
 import { apiRoutes } from '../routes/apiRoutes';
 import { clearStoredUser, getStoredUser, storeUser } from '../utils/auth';
 
+const ThemeToggle = () => {
+  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'dark');
+
+  useEffect(() => {
+    document.body.className = theme === 'light' ? 'light-mode' : '';
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  return (
+    <button
+      onClick={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
+      style={{
+        background: theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+        border: theme === 'dark' ? '1px solid rgba(255,255,255,0.2)' : '1px solid rgba(0,0,0,0.1)',
+        color: theme === 'dark' ? '#fff' : '#333',
+        padding: '8px 16px',
+        borderRadius: '20px',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        fontSize: '0.9rem',
+        fontWeight: 'bold',
+        transition: 'all 0.2s ease'
+      }}
+    >
+      {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
+    </button>
+  );
+};
+
+const AdminIcon = ({ name, size = 18 }) => {
+  const iconProps = {
+    width: size,
+    height: size,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: '1.9',
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round'
+  };
+
+  const icons = {
+    dashboard: (
+      <svg {...iconProps}>
+        <rect x="3" y="3" width="7" height="7" rx="1.5" />
+        <rect x="14" y="3" width="7" height="4" rx="1.5" />
+        <rect x="14" y="10" width="7" height="11" rx="1.5" />
+        <rect x="3" y="13" width="7" height="8" rx="1.5" />
+      </svg>
+    ),
+    users: (
+      <svg {...iconProps}>
+        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+      </svg>
+    ),
+    graduation: (
+      <svg {...iconProps}>
+        <path d="m2 8 10-5 10 5-10 5Z" />
+        <path d="M6 10.6v4.4c0 1.6 2.7 3 6 3s6-1.4 6-3v-4.4" />
+      </svg>
+    ),
+    clipboard: (
+      <svg {...iconProps}>
+        <rect x="8" y="3" width="8" height="4" rx="1" />
+        <path d="M9 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3" />
+        <path d="M9 12h6" />
+        <path d="M9 16h6" />
+      </svg>
+    ),
+    spark: (
+      <svg {...iconProps}>
+        <path d="m13 2-2 7h4l-4 13 2-8H9z" />
+      </svg>
+    ),
+    swap: (
+      <svg {...iconProps}>
+        <path d="M16 3h5v5" />
+        <path d="m21 3-7 7" />
+        <path d="M8 21H3v-5" />
+        <path d="m3 21 7-7" />
+      </svg>
+    ),
+    calendar: (
+      <svg {...iconProps}>
+        <rect x="3" y="5" width="18" height="16" rx="2" />
+        <path d="M16 3v4" />
+        <path d="M8 3v4" />
+        <path d="M3 11h18" />
+      </svg>
+    ),
+    wallet: (
+      <svg {...iconProps}>
+        <path d="M3 7a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v12H5a2 2 0 0 1-2-2Z" />
+        <path d="M18 9h3v6h-3a2 2 0 0 1 0-6Z" />
+        <path d="M18 7V5a2 2 0 0 0-2-2H6" />
+      </svg>
+    ),
+    ticket: (
+      <svg {...iconProps}>
+        <path d="M4 9V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v3a2 2 0 0 0 0 4v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3a2 2 0 0 0 0-4Z" />
+        <path d="M9 9h.01" />
+        <path d="M15 15h.01" />
+      </svg>
+    ),
+    scale: (
+      <svg {...iconProps}>
+        <path d="M12 3v18" />
+        <path d="M7 21h10" />
+        <path d="M5 7h14" />
+        <path d="m7 7-3 5a3 3 0 0 0 6 0Z" />
+        <path d="m17 7-3 5a3 3 0 0 0 6 0Z" />
+      </svg>
+    ),
+    content: (
+      <svg {...iconProps}>
+        <path d="M14 3h7v7" />
+        <path d="M10 14 21 3" />
+        <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+      </svg>
+    ),
+    megaphone: (
+      <svg {...iconProps}>
+        <path d="m3 11 12-5v12L3 13z" />
+        <path d="M15 8h3a3 3 0 0 1 0 6h-3" />
+        <path d="m6 13 2 6" />
+      </svg>
+    ),
+    analytics: (
+      <svg {...iconProps}>
+        <path d="M4 19V5" />
+        <path d="M10 19v-8" />
+        <path d="M16 19v-4" />
+        <path d="M22 19V9" />
+      </svg>
+    ),
+    settings: (
+      <svg {...iconProps}>
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.65 1.65 0 0 0 15 19.4a1.65 1.65 0 0 0-1 .6 1.65 1.65 0 0 0-.33 1V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-.33-1 1.65 1.65 0 0 0-1-.6 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-.6-1 1.65 1.65 0 0 0-1-.33H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1-.33 1.65 1.65 0 0 0 .6-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6c.38-.16.7-.43.9-.77.2-.34.3-.73.27-1.12V3a2 2 0 1 1 4 0v.09c-.03.39.07.78.27 1.12.2.34.52.61.9.77a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.16.38.43.7.77.9.34.2.73.3 1.12.27H21a2 2 0 1 1 0 4h-.09c-.39-.03-.78.07-1.12.27-.34.2-.61.52-.77.9Z" />
+      </svg>
+    ),
+    star: (
+      <svg {...iconProps}>
+        <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.2 6.4 20.2l1.1-6.2L3 9.6l6.2-.9Z" />
+      </svg>
+    ),
+    logs: (
+      <svg {...iconProps}>
+        <path d="M8 6h13" />
+        <path d="M8 12h13" />
+        <path d="M8 18h13" />
+        <path d="M3 6h.01" />
+        <path d="M3 12h.01" />
+        <path d="M3 18h.01" />
+      </svg>
+    ),
+    chevron: (
+      <svg {...iconProps}>
+        <path d="m9 6 6 6-6 6" />
+      </svg>
+    )
+  };
+
+  return icons[name] || icons.dashboard;
+};
+
+const getSidebarSectionForPath = (pathname) => {
+  if (pathname.includes('/credits') || pathname.includes('/support') || pathname.includes('/disputes')) return 'finance';
+  if (pathname.includes('/content') || pathname.includes('/announcements')) return 'content';
+  if (pathname.includes('/reports') || pathname.includes('/settings') || pathname.includes('/feedback') || pathname.includes('/logs')) return 'system';
+  return 'core';
+};
+
 // --- Styled Components for Dashboard ---
 const SidebarItem = ({ icon, label, to, active, badgeCount = 0 }) => {
   const [isHovered, setIsHovered] = useState(false);
@@ -22,7 +200,12 @@ const SidebarItem = ({ icon, label, to, active, badgeCount = 0 }) => {
         boxShadow: active ? '0 4px 10px rgba(100,108,255,0.3)' : 'none'
       }}
     >
-      <span style={{ fontSize: '1.2rem', width: '24px', textAlign: 'center', transition: 'transform 0.2s ease', transform: isHovered || active ? 'scale(1.1)' : 'scale(1)' }}>{icon}</span>
+      <span style={{
+        width: '24px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        transition: 'transform 0.2s ease', transform: isHovered || active ? 'scale(1.08)' : 'scale(1)'
+      }}>
+        {icon}
+      </span>
       <span>{label}</span>
       {badgeCount > 0 && (
         <span style={{
@@ -36,6 +219,57 @@ const SidebarItem = ({ icon, label, to, active, badgeCount = 0 }) => {
     </Link>
   );
 };
+
+const SidebarSection = ({ title, icon, isOpen, onToggle, active, children }) => (
+  <div style={{ margin: '0 12px 8px' }}>
+    <button
+      type="button"
+      onClick={onToggle}
+      style={{
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '12px',
+        padding: '12px 14px',
+        background: isOpen || active ? 'rgba(99, 102, 241, 0.12)' : 'rgba(255,255,255,0.02)',
+        color: isOpen || active ? '#fff' : '#cbd5e1',
+        border: `1px solid ${isOpen || active ? 'rgba(129, 140, 248, 0.28)' : 'rgba(255,255,255,0.04)'}`,
+        borderRadius: '12px',
+        cursor: 'pointer',
+        transition: 'all 0.25s ease',
+        boxShadow: isOpen || active ? '0 10px 24px rgba(15, 23, 42, 0.22)' : 'none'
+      }}
+    >
+      <span style={{ width: '24px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{icon}</span>
+      <div style={{ flex: 1, textAlign: 'left' }}>
+        <div style={{ fontSize: '0.92rem', fontWeight: '700' }}>{title}</div>
+        <div style={{ fontSize: '0.72rem', color: isOpen || active ? '#a5b4fc' : '#64748b', marginTop: '2px' }}>Click to view links</div>
+      </div>
+      <span style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)',
+        transition: 'transform 0.25s ease'
+      }}>
+        <AdminIcon name="chevron" size={16} />
+      </span>
+    </button>
+
+    <div style={{
+      maxHeight: isOpen ? '520px' : '0px',
+      opacity: isOpen ? 1 : 0,
+      overflow: 'hidden',
+      transform: isOpen ? 'translateY(0)' : 'translateY(-8px)',
+      transition: 'max-height 0.32s ease, opacity 0.22s ease, transform 0.22s ease',
+      paddingTop: isOpen ? '10px' : '0px'
+    }}>
+      <div style={{ borderLeft: '1px solid rgba(99,102,241,0.18)', marginLeft: '18px', paddingLeft: '2px' }}>
+        {children}
+      </div>
+    </div>
+  </div>
+);
 
 const StatCounter = ({ end, duration = 2000, suffix = "" }) => {
   const [count, setCount] = useState(0);
@@ -145,31 +379,55 @@ const PieChart = ({ data, title }) => {
   const gradientString = `conic-gradient(${backgroundGradient}, transparent ${100 * progress}%)`;
 
   return (
-    <div style={{ background: '#1f2937', padding: '24px', borderRadius: '12px', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}>
-      <h3 style={{ margin: '0 0 1.5rem 0', color: '#e5e7eb', fontSize: '1.2rem' }}>{title}</h3>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '2rem', flexWrap: 'wrap' }}>
+    <div style={{
+      background: '#1f2937', padding: '24px', borderRadius: '12px',
+      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+      display: 'flex', flexDirection: 'column', height: '100%'
+    }}>
+      <h3 style={{ margin: '0 0 1.5rem 0', color: '#e5e7eb', fontSize: '1.2rem', fontWeight: '600' }}>{title}</h3>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '3rem', flexWrap: 'wrap', flex: 1 }}>
+
+        {/* Modern Donut Chart */}
         <div style={{
-          width: '150px', height: '150px', borderRadius: '50%',
+          position: 'relative',
+          width: '170px', height: '170px', borderRadius: '50%',
           background: gradientString,
-          transform: `scale(${0.8 + 0.2 * progress})`,
-          transition: 'transform 0.1s',
-          opacity: progress
-        }}></div>
-        <div style={{ perspective: '800px', paddingBottom: '15px' }}>
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          boxShadow: '0 10px 15px -3px rgba(0,0,0,0.3)',
+          transition: 'transform 0.3s ease',
+          cursor: 'pointer'
+        }}
+          onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.05)'}
+          onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
+        >
+          {/* Inner Cutout for Donut effect */}
           <div style={{
-            width: '150px', height: '150px', borderRadius: '50%',
-            background: gradientString,
-            transform: `rotateX(55deg) scale(${0.8 + 0.2 * progress})`,
-            boxShadow: '0 1px 0 #111827, 0 2px 0 #111827, 0 3px 0 #111827, 0 4px 0 #111827, 0 5px 0 #111827, 0 6px 0 #111827, 0 7px 0 #111827, 0 8px 0 #111827, 0 9px 0 #111827, 0 10px 0 #111827, 0 20px 20px rgba(0,0,0,0.6)',
-            transition: 'transform 0.1s',
-            opacity: progress
-          }}></div>
+            width: '110px', height: '110px', borderRadius: '50%', // Size of the hollow center
+            background: '#1f2937',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            boxShadow: 'inset 0 4px 6px rgba(0,0,0,0.4)'
+          }}>
+            <span style={{ color: '#9ca3af', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '2px', opacity: progress }}>
+              Total
+            </span>
+            <span style={{ color: '#fff', fontWeight: 'bold', fontSize: '1.4rem', opacity: progress }}>
+              {Math.round(progress * 100)}%
+            </span>
+          </div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', opacity: progress, transition: 'opacity 1s ease' }}>
+
+        {/* Legend List */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', opacity: progress, transition: 'opacity 1s ease', minWidth: '150px' }}>
           {data.map(item => (
-            <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <div style={{ width: '12px', height: '12px', borderRadius: '3px', background: item.color }}></div>
-              <span style={{ color: '#d1d5db', fontSize: '0.9rem' }}>{item.label} ({item.percentage}%)</span>
+            <div key={item.label}
+              style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)', transition: 'background 0.2s', cursor: 'default' }}
+              onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.08)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
+            >
+              <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: item.color, boxShadow: `0 0 10px ${item.color}80` }}></div>
+              <span style={{ color: '#d1d5db', fontSize: '0.95rem', fontWeight: '500' }}>{item.label}</span>
+              <span style={{ color: '#fff', fontSize: '0.95rem', fontWeight: 'bold', marginLeft: 'auto', paddingLeft: '15px' }}>{item.percentage}%</span>
             </div>
           ))}
         </div>
@@ -311,6 +569,7 @@ const ProfileDropdown = ({ onLogout }) => (
 const SuperAdmin = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const [openSidebarSection, setOpenSidebarSection] = useState(() => getSidebarSectionForPath(location.pathname));
   const [stats, setStats] = useState({ totalUsers: 0, totalSkills: 0, totalSwaps: 0, activeSwaps: 154 });
   const [allUsers, setAllUsers] = useState([]);
   const [allSkills, setAllSkills] = useState([]);
@@ -340,6 +599,10 @@ const SuperAdmin = () => {
     { title: 'Email Templates', lastUpdated: '2 weeks ago', text: 'Hello User,\nWelcome to SkillSwap!' }
   ]);
   const [editingContent, setEditingContent] = useState(null);
+
+  useEffect(() => {
+    setOpenSidebarSection(getSidebarSectionForPath(location.pathname));
+  }, [location.pathname]);
 
   const handleAvatarChange = async (e) => {
     const file = e.target.files[0];
@@ -838,8 +1101,12 @@ const SuperAdmin = () => {
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '2rem' }}>
           {/* Chart Section */}
-          <div style={{ background: '#1f2937', padding: '24px', borderRadius: '12px', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}>
-            <h3 style={{ margin: '0 0 1.5rem 0', color: '#e5e7eb', fontSize: '1.2rem' }}>User Growth</h3>
+          <div style={{
+            background: '#1f2937', padding: '24px', borderRadius: '12px',
+            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+            display: 'flex', flexDirection: 'column', height: '100%'
+          }}>
+            <h3 style={{ margin: '0 0 1.5rem 0', color: '#e5e7eb', fontSize: '1.2rem', fontWeight: '600' }}>User Growth</h3>
             <SimpleLineChart data={userGrowthData} color="#646cff" />
           </div>
           <PieChart data={skillCategoryData} title="Skill Category Distribution" />
@@ -1453,30 +1720,60 @@ const SuperAdmin = () => {
             <span style={{ fontSize: '1.25rem', fontWeight: '700', color: '#fff', letterSpacing: '-0.5px' }}>SkillSwap<span style={{ color: '#646cff' }}>.Admin</span></span>
           </div>
 
-          <div style={{ flex: 1, padding: '10px 0', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            <p style={{ padding: '0 20px', fontSize: '0.75rem', textTransform: 'uppercase', color: '#6b7280', fontWeight: '600', marginBottom: '8px', letterSpacing: '0.5px' }}>Menu</p>
-            <SidebarItem to="/super-admin/overview" label="Dashboard" icon="📊" active={location.pathname.includes('/overview') || location.pathname === '/super-admin' || location.pathname === '/super-admin/'} />
-            <SidebarItem to="/super-admin/user-management" label="User Management" icon="👥" active={location.pathname.includes('/user-management')} />
-            <SidebarItem to="/super-admin/teacher-management" label="Teacher Management" icon="🎓" active={location.pathname.includes('/teacher-management')} />
-            <SidebarItem to="/super-admin/verifier-apps" label="Verifier Applications" icon="📝" active={location.pathname.includes('/verifier-apps')} badgeCount={verifierApps.length} />
-            <SidebarItem to="/super-admin/skill-management" label="Skill Management" icon="⚡" active={location.pathname.includes('/skill-management')} />
-            <SidebarItem to="/super-admin/swap-requests" label="Swap Requests" icon="🔄" active={location.pathname.includes('/swap-requests')} badgeCount={allSessions.filter(r => r.status === 'Pending').length} />
-            <SidebarItem to="/super-admin/sessions" label="Sessions / Meetings" icon="📅" active={location.pathname.includes('/sessions')} />
+          <div style={{ flex: 1, padding: '10px 0 18px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <p style={{ padding: '0 20px', fontSize: '0.75rem', textTransform: 'uppercase', color: '#6b7280', fontWeight: '600', marginBottom: '8px', letterSpacing: '0.5px' }}>Admin Navigation</p>
 
-            <p style={{ padding: '0 20px', fontSize: '0.75rem', textTransform: 'uppercase', color: '#6b7280', fontWeight: '600', margin: '20px 0 8px', letterSpacing: '0.5px' }}>Finance & Support</p>
-            <SidebarItem to="/super-admin/credits" label="Credit Management" icon="💰" active={location.pathname.includes('/credits')} />
-            <SidebarItem to="/super-admin/support" label="Support Tickets" icon="🎫" active={location.pathname.includes('/support')} badgeCount={allTickets.filter(t => t.status === 'Pending').length} />
-            <SidebarItem to="/super-admin/disputes" label="Disputes Handling" icon="⚖️" active={location.pathname.includes('/disputes')} badgeCount={allAdminReports.filter(r => r.status !== 'Resolved').length} />
+            <SidebarSection
+              title="Core Management"
+              icon={<AdminIcon name="dashboard" />}
+              isOpen={openSidebarSection === 'core'}
+              active={getSidebarSectionForPath(location.pathname) === 'core'}
+              onToggle={() => setOpenSidebarSection(prev => prev === 'core' ? '' : 'core')}
+            >
+              <SidebarItem to="/super-admin/overview" label="Dashboard" icon={<AdminIcon name="dashboard" />} active={location.pathname.includes('/overview') || location.pathname === '/super-admin' || location.pathname === '/super-admin/'} />
+              <SidebarItem to="/super-admin/user-management" label="User Management" icon={<AdminIcon name="users" />} active={location.pathname.includes('/user-management')} />
+              <SidebarItem to="/super-admin/teacher-management" label="Teacher Management" icon={<AdminIcon name="graduation" />} active={location.pathname.includes('/teacher-management')} />
+              <SidebarItem to="/super-admin/verifier-apps" label="Verifier Applications" icon={<AdminIcon name="clipboard" />} active={location.pathname.includes('/verifier-apps')} badgeCount={verifierApps.length} />
+              <SidebarItem to="/super-admin/skill-management" label="Skill Management" icon={<AdminIcon name="spark" />} active={location.pathname.includes('/skill-management')} />
+              <SidebarItem to="/super-admin/swap-requests" label="Swap Requests" icon={<AdminIcon name="swap" />} active={location.pathname.includes('/swap-requests')} badgeCount={allSessions.filter(r => r.status === 'Pending').length} />
+              <SidebarItem to="/super-admin/sessions" label="Sessions / Meetings" icon={<AdminIcon name="calendar" />} active={location.pathname.includes('/sessions')} />
+            </SidebarSection>
 
-            <p style={{ padding: '0 20px', fontSize: '0.75rem', textTransform: 'uppercase', color: '#6b7280', fontWeight: '600', margin: '20px 0 8px', letterSpacing: '0.5px' }}>Content & Marketing</p>
-            <SidebarItem to="/super-admin/content" label="Content Management" icon="📝" active={location.pathname.includes('/content')} />
-            <SidebarItem to="/super-admin/announcements" label="Announcements" icon="📢" active={location.pathname.includes('/announcements')} />
+            <SidebarSection
+              title="Finance & Support"
+              icon={<AdminIcon name="wallet" />}
+              isOpen={openSidebarSection === 'finance'}
+              active={getSidebarSectionForPath(location.pathname) === 'finance'}
+              onToggle={() => setOpenSidebarSection(prev => prev === 'finance' ? '' : 'finance')}
+            >
+              <SidebarItem to="/super-admin/credits" label="Credit Management" icon={<AdminIcon name="wallet" />} active={location.pathname.includes('/credits')} />
+              <SidebarItem to="/super-admin/support" label="Support Tickets" icon={<AdminIcon name="ticket" />} active={location.pathname.includes('/support')} badgeCount={allTickets.filter(t => t.status === 'Pending').length} />
+              <SidebarItem to="/super-admin/disputes" label="Disputes Handling" icon={<AdminIcon name="scale" />} active={location.pathname.includes('/disputes')} badgeCount={allAdminReports.filter(r => r.status !== 'Resolved').length} />
+            </SidebarSection>
 
-            <p style={{ padding: '0 20px', fontSize: '0.75rem', textTransform: 'uppercase', color: '#6b7280', fontWeight: '600', margin: '20px 0 8px', letterSpacing: '0.5px' }}>System & Config</p>
-            <SidebarItem to="/super-admin/reports" label="Reports & Analytics" icon="📑" active={location.pathname.includes('/reports')} />
-            <SidebarItem to="/super-admin/settings" label="Platform Settings" icon="⚙️" active={location.pathname.includes('/settings')} />
-            <SidebarItem to="/super-admin/feedback" label="Feedback & Reviews" icon="⭐" active={location.pathname.includes('/feedback')} />
-            <SidebarItem to="/super-admin/logs" label="System Logs" icon="📜" active={location.pathname.includes('/logs')} />
+            <SidebarSection
+              title="Content & Marketing"
+              icon={<AdminIcon name="megaphone" />}
+              isOpen={openSidebarSection === 'content'}
+              active={getSidebarSectionForPath(location.pathname) === 'content'}
+              onToggle={() => setOpenSidebarSection(prev => prev === 'content' ? '' : 'content')}
+            >
+              <SidebarItem to="/super-admin/content" label="Content Management" icon={<AdminIcon name="content" />} active={location.pathname.includes('/content')} />
+              <SidebarItem to="/super-admin/announcements" label="Announcements" icon={<AdminIcon name="megaphone" />} active={location.pathname.includes('/announcements')} />
+            </SidebarSection>
+
+            <SidebarSection
+              title="System & Config"
+              icon={<AdminIcon name="settings" />}
+              isOpen={openSidebarSection === 'system'}
+              active={getSidebarSectionForPath(location.pathname) === 'system'}
+              onToggle={() => setOpenSidebarSection(prev => prev === 'system' ? '' : 'system')}
+            >
+              <SidebarItem to="/super-admin/reports" label="Reports & Analytics" icon={<AdminIcon name="analytics" />} active={location.pathname.includes('/reports')} />
+              <SidebarItem to="/super-admin/settings" label="Platform Settings" icon={<AdminIcon name="settings" />} active={location.pathname.includes('/settings')} />
+              <SidebarItem to="/super-admin/feedback" label="Feedback & Reviews" icon={<AdminIcon name="star" />} active={location.pathname.includes('/feedback')} />
+              <SidebarItem to="/super-admin/logs" label="System Logs" icon={<AdminIcon name="logs" />} active={location.pathname.includes('/logs')} />
+            </SidebarSection>
           </div>
 
           <div style={{ padding: '20px', flexShrink: 0 }}>
@@ -1522,6 +1819,7 @@ const SuperAdmin = () => {
 
             {/* Right Actions */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+              <ThemeToggle />
               <div className="admin-hover-trigger" title="Notifications" onMouseEnter={e => e.currentTarget.style.color = '#fff'} onMouseLeave={e => e.currentTarget.style.color = '#9ca3af'} style={{ position: 'relative', cursor: 'pointer', color: '#9ca3af', transition: 'color 0.2s ease' }}>
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
                 <span style={{ position: 'absolute', top: '-2px', right: '-2px', width: '8px', height: '8px', background: '#ef4444', borderRadius: '50%' }}></span>

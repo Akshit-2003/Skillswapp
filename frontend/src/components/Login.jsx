@@ -9,6 +9,7 @@ import { signInWithPopup } from 'firebase/auth';
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -24,6 +25,7 @@ const Login = () => {
 
   const handleLogin = async (e) => {
     e.preventDefault();
+    setLoading(true);
     try {
       const res = await API.post(apiRoutes.auth.login, {
         email,
@@ -42,6 +44,9 @@ const Login = () => {
     } catch (error) {
       console.error('Error:', error);
       alert(error.response?.data?.message || 'Login Failed');
+    }
+    finally {
+      setLoading(false);
     }
   };
 
@@ -64,8 +69,8 @@ const Login = () => {
       alert('Login Successful!');
       navigate(from || getHomeRouteForUser(data.user));
     } catch (error) {
-      console.error('Social Login Error:', error);
-      alert('Social Login Failed. Please try again.');
+      console.error('Error:', error);
+      alert(error.response?.data?.message || 'Login Failed');
     }
   };
 
@@ -109,7 +114,7 @@ const Login = () => {
               )}
             </button>
           </div>
-          <button type="submit" className="btn-primary btn-block">Login</button>
+          <button type="submit" className="btn-primary btn-block" disabled={loading}>{loading ? 'Logging in...' : 'Login'}</button>
         </form>
 
         <div className="divider">or continue with</div>
@@ -130,5 +135,6 @@ const Login = () => {
     </div>
   );
 };
+
 
 export default Login;
