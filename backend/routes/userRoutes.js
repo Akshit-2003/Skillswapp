@@ -244,15 +244,16 @@ router.post('/session-call', async (req, res) => {
         let updatedSession = null;
 
         if (type === 'offer') {
+            const nextAttemptId = attemptId || activeAttemptId || createAttemptId();
             updatedSession = await Session.findByIdAndUpdate(
                 sessionId,
                 {
                     $set: {
-                        'call.attemptId': attemptId || activeAttemptId || createAttemptId(),
+                        'call.attemptId': nextAttemptId,
                         'call.offer': {
                             fromEmail: normalizedFromEmail,
                             toEmail: resolvedToEmail,
-                            attemptId: attemptId || activeAttemptId || '',
+                            attemptId: nextAttemptId,
                             payload,
                             updatedAt: new Date()
                         },

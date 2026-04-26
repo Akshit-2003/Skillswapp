@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { buildApiUrl } from '../api';
 import { apiRoutes } from '../routes/apiRoutes';
@@ -37,6 +37,13 @@ const ThemeToggle = () => {
 
 const isSkillReviewSession = (session) => session?.sessionType === 'skill-review';
 const getApprovedSkills = (skills = []) => skills.filter((skill) => !skill.includes('[Pending Approval'));
+
+const RTC_CONFIGURATION = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' }
+  ]
+};
 
 const StatCounter = ({ end, duration = 2000, suffix = "" }) => {
   const [count, setCount] = useState(0);
@@ -88,6 +95,12 @@ const Dashboard = () => {
   const [isVerifying, setIsVerifying] = useState(false);
   const [classChat, setClassChat] = useState([]);
   const [chatInput, setChatInput] = useState('');
+  const [callStatus, setCallStatus] = useState('Ready to connect');
+  const [isMicEnabled, setIsMicEnabled] = useState(true);
+  const [isCameraEnabled, setIsCameraEnabled] = useState(true);
+  const [hasRemoteMedia, setHasRemoteMedia] = useState(false);
+  const [isPreparingCall, setIsPreparingCall] = useState(false);
+  const [localMediaError, setLocalMediaError] = useState('');
   const [dashData, setDashData] = useState({
     upcomingSessions: [],
     topMentors: [],
@@ -101,6 +114,15 @@ const Dashboard = () => {
   });
   const navigate = useNavigate();
   const location = useLocation();
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const localStreamRef = useRef(null);
+  const remoteStreamRef = useRef(null);
+  const peerConnectionRef = useRef(null);
+  const processedSignalsRef = useRef({ offer: null, answer: null, candidates: new Set() });
+  const pendingIceCandidatesRef = useRef([]);
+  const callAttemptIdRef = useRef('');
+  const offerCreatedRef = useRef(false);
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -148,6 +170,7 @@ const Dashboard = () => {
       
       if (!sessionStillActive) {
         // Session is no longer active in DB (meaning the other person ended it)
+        cleanupCallResources();
         setShowVideoModal(false);
         if (viewMode === 'learning' && !isSkillReviewSession(activeSession)) {
           setRatingSession(activeSession);
@@ -244,7 +267,7 @@ const Dashboard = () => {
       let data;
       try {
         data = JSON.parse(text);
-      } catch (err) {
+      } catch {
         throw new Error("Server returned an invalid response. Backend route '/api/user/skills' might be missing.");
       }
 
@@ -298,6 +321,197 @@ const Dashboard = () => {
     setShowVideoModal(true);
   };
 
+  const getCallPeerEmail = (session = activeSession) => {
+    if (!session || !user?.email) return '';
+    return viewMode === 'teaching' ? session.studentEmail : session.mentorEmail;
+  };
+
+  const isCallInitiator = () => viewMode === 'learning';
+
+  const attachVideoStreams = () => {
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = localStreamRef.current;
+      localVideoRef.current.play?.().catch(() => {});
+    }
+
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = remoteStreamRef.current;
+      remoteVideoRef.current.play?.().catch(() => {});
+    }
+  };
+
+  const cleanupCallResources = () => {
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.ontrack = null;
+      peerConnectionRef.current.onicecandidate = null;
+      peerConnectionRef.current.onconnectionstatechange = null;
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+    }
+
+    remoteStreamRef.current = null;
+    processedSignalsRef.current = { offer: null, answer: null, candidates: new Set() };
+    pendingIceCandidatesRef.current = [];
+    callAttemptIdRef.current = '';
+    offerCreatedRef.current = false;
+
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+
+    setHasRemoteMedia(false);
+    setIsPreparingCall(false);
+    setCallStatus('Ready to connect');
+    setIsMicEnabled(true);
+    setIsCameraEnabled(true);
+    setLocalMediaError('');
+  };
+
+  const closeVideoModal = () => {
+    cleanupCallResources();
+    setShowVideoModal(false);
+  };
+
+  const sendCallSignal = async (sessionId, type, fromEmail, toEmail, payload = null) => {
+    const response = await fetch(buildApiUrl('/api/user/session-call'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, type, fromEmail, toEmail, payload, attemptId: callAttemptIdRef.current })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to sync ${type} signal`);
+    }
+
+    const data = await response.json();
+    if (data?.call?.attemptId) {
+      callAttemptIdRef.current = data.call.attemptId;
+    }
+    return data;
+  };
+
+  const ensureLocalStream = async () => {
+    if (localStreamRef.current) return localStreamRef.current;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localStreamRef.current = stream;
+      setLocalMediaError('');
+      attachVideoStreams();
+      return stream;
+    } catch (error) {
+      console.error('Local media error:', error);
+      setLocalMediaError('Camera/microphone blocked. You can still receive the other person.');
+      return null;
+    }
+  };
+
+  const createPeerConnection = async () => {
+    if (!activeSession || !user?.email) return null;
+
+    if (
+      peerConnectionRef.current &&
+      !['failed', 'closed', 'disconnected'].includes(peerConnectionRef.current.connectionState)
+    ) {
+      return peerConnectionRef.current;
+    }
+
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+
+    const stream = await ensureLocalStream();
+    const remoteStream = new MediaStream();
+    remoteStreamRef.current = remoteStream;
+
+    const peerConnection = new RTCPeerConnection(RTC_CONFIGURATION);
+
+    if (stream) {
+      stream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, stream);
+      });
+    } else {
+      peerConnection.addTransceiver('video', { direction: 'recvonly' });
+      peerConnection.addTransceiver('audio', { direction: 'recvonly' });
+    }
+
+    peerConnection.ontrack = (event) => {
+      const incomingTracks = event.streams?.[0]?.getTracks?.().length
+        ? event.streams[0].getTracks()
+        : [event.track];
+
+      incomingTracks.forEach(track => {
+        const alreadyAdded = remoteStream.getTracks().some(existingTrack => existingTrack.id === track.id);
+        if (!alreadyAdded) {
+          remoteStream.addTrack(track);
+        }
+      });
+      setHasRemoteMedia(true);
+      setCallStatus('Connected & live');
+      attachVideoStreams();
+    };
+
+    peerConnection.onicecandidate = async (event) => {
+      const peerEmail = getCallPeerEmail();
+      if (!event.candidate || !peerEmail) return;
+      try {
+        await sendCallSignal(activeSession.id, 'ice-candidate', user.email, peerEmail, event.candidate.toJSON());
+      } catch (error) {
+        console.error('ICE send error:', error);
+      }
+    };
+
+    peerConnection.onconnectionstatechange = () => {
+      const state = peerConnection.connectionState;
+      if (state === 'connected' || state === 'completed') setCallStatus('Connected & live');
+      if (state === 'connecting') setCallStatus('Connecting...');
+      if (state === 'failed' || state === 'disconnected') setCallStatus('Reconnecting...');
+      if (state === 'closed') setCallStatus('Call ended');
+    };
+
+    peerConnectionRef.current = peerConnection;
+    attachVideoStreams();
+    return peerConnection;
+  };
+
+  const flushPendingIceCandidates = async (peerConnection) => {
+    if (!peerConnection?.remoteDescription || pendingIceCandidatesRef.current.length === 0) return;
+
+    const queuedCandidates = [...pendingIceCandidatesRef.current];
+    pendingIceCandidatesRef.current = [];
+
+    for (const candidate of queuedCandidates) {
+      try {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (error) {
+        console.error('Queued ICE error:', error);
+      }
+    }
+  };
+
+  const toggleMicrophone = () => {
+    if (!localStreamRef.current) return;
+    const nextValue = !isMicEnabled;
+    localStreamRef.current.getAudioTracks().forEach(track => {
+      track.enabled = nextValue;
+    });
+    setIsMicEnabled(nextValue);
+  };
+
+  const toggleCamera = () => {
+    if (!localStreamRef.current) return;
+    const nextValue = !isCameraEnabled;
+    localStreamRef.current.getVideoTracks().forEach(track => {
+      track.enabled = nextValue;
+    });
+    setIsCameraEnabled(nextValue);
+  };
+
   // Real-time Live Chat Sync (every 2 seconds while modal is open)
   useEffect(() => {
     let chatInterval;
@@ -344,6 +558,8 @@ const Dashboard = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: activeSession.id })
       });
+      const sessionToRate = activeSession;
+      cleanupCallResources();
       setShowVideoModal(false);
       window.dispatchEvent(new Event('user_updated')); // fetch updated credits
 
@@ -361,6 +577,132 @@ const Dashboard = () => {
       console.error('End session error:', err);
     }
   };
+
+  useEffect(() => {
+    if (!showVideoModal || !activeSession?.id || !user?.email) return undefined;
+
+    let cancelled = false;
+
+    const initializeCall = async () => {
+      if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection) {
+        setCallStatus('Browser not supported');
+        return;
+      }
+
+      const peerEmail = getCallPeerEmail(activeSession);
+      if (!peerEmail) {
+        setCallStatus('Waiting for the other participant...');
+        return;
+      }
+
+      setIsPreparingCall(true);
+      setCallStatus('Preparing video...');
+
+      try {
+        const peerConnection = await createPeerConnection();
+        if (!peerConnection || cancelled) return;
+
+        if (isCallInitiator() && !offerCreatedRef.current) {
+          setCallStatus('Calling...');
+          const offer = await peerConnection.createOffer();
+          await peerConnection.setLocalDescription(offer);
+          await sendCallSignal(activeSession.id, 'offer', user.email, peerEmail, offer);
+          offerCreatedRef.current = true;
+        } else if (!cancelled) {
+          setCallStatus('Waiting for call...');
+        }
+      } catch (error) {
+        console.error('Video init error:', error);
+        setCallStatus('Unable to start video');
+      } finally {
+        if (!cancelled) setIsPreparingCall(false);
+      }
+    };
+
+    initializeCall();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showVideoModal, activeSession?.id, user?.email, viewMode]);
+
+  useEffect(() => {
+    if (!showVideoModal || !activeSession?.id || !user?.email || isPreparingCall) return undefined;
+
+    let disposed = false;
+
+    const pollSignals = async () => {
+      try {
+        const peerEmail = getCallPeerEmail(activeSession);
+        if (!peerEmail) return;
+
+        const res = await fetch(buildApiUrl(`/api/user/session-call/${activeSession.id}?email=${encodeURIComponent(user.email)}&t=${Date.now()}`), {
+          cache: 'no-store'
+        });
+        if (!res.ok || disposed) return;
+
+        const callState = await res.json();
+        if (callState.attemptId) callAttemptIdRef.current = callState.attemptId;
+
+        const peerConnection = await createPeerConnection();
+        if (!peerConnection || disposed) return;
+
+        if (
+          callState.offer &&
+          callState.offer.fromEmail === peerEmail &&
+          processedSignalsRef.current.offer !== callState.offer.updatedAt
+        ) {
+          if (!peerConnection.remoteDescription) {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(callState.offer.payload));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            await sendCallSignal(activeSession.id, 'answer', user.email, peerEmail, answer);
+            await flushPendingIceCandidates(peerConnection);
+          }
+          processedSignalsRef.current.offer = callState.offer.updatedAt;
+        }
+
+        if (
+          callState.answer &&
+          callState.answer.fromEmail === peerEmail &&
+          processedSignalsRef.current.answer !== callState.answer.updatedAt
+        ) {
+          if (peerConnection.localDescription && !peerConnection.remoteDescription) {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(callState.answer.payload));
+            await flushPendingIceCandidates(peerConnection);
+          }
+          processedSignalsRef.current.answer = callState.answer.updatedAt;
+        }
+
+        if (Array.isArray(callState.iceCandidates)) {
+          for (const candidateEntry of callState.iceCandidates) {
+            const candidateKey = JSON.stringify(candidateEntry.candidate);
+            if (processedSignalsRef.current.candidates.has(candidateKey)) continue;
+
+            if (peerConnection.remoteDescription) {
+              await peerConnection.addIceCandidate(new RTCIceCandidate(candidateEntry.candidate));
+            } else {
+              pendingIceCandidatesRef.current.push(candidateEntry.candidate);
+            }
+            processedSignalsRef.current.candidates.add(candidateKey);
+          }
+        }
+      } catch (error) {
+        console.error('Signal polling error:', error);
+      }
+    };
+
+    pollSignals();
+    const intervalId = setInterval(pollSignals, 2000);
+    return () => {
+      disposed = true;
+      clearInterval(intervalId);
+    };
+  }, [showVideoModal, activeSession?.id, user?.email, isPreparingCall, viewMode]);
+
+  useEffect(() => () => {
+    cleanupCallResources();
+  }, []);
 
   const submitRating = async () => {
     if (ratingValue === 0) {
@@ -385,7 +727,7 @@ const Dashboard = () => {
       let data;
       try {
         data = JSON.parse(text);
-      } catch (err) {
+      } catch {
         throw new Error("Server returned an invalid HTML response. Backend route '/api/user/session-feedback' might be missing.");
       }
 
@@ -864,8 +1206,15 @@ const Dashboard = () => {
 
               {/* Sidebar (My Video & Chat) */}
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ flex: 1, background: '#111827', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #374151', position: 'relative' }}>
-                  <span style={{ fontSize: '2rem' }}>🧑‍💻</span>
+                <div style={{ flex: 1, background: '#111827', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #374151', position: 'relative', overflow: 'hidden' }}>
+                  <video ref={localVideoRef} autoPlay muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: isCameraEnabled ? 1 : 0.25 }} />
+                  {localMediaError && (
+                    <div style={{ position: 'absolute', inset: 'auto 12px 12px 12px', background: 'rgba(0,0,0,0.75)', color: '#fbbf24', padding: '8px 10px', borderRadius: '8px', fontSize: '0.8rem', border: '1px solid rgba(251,191,36,0.25)' }}>
+                      {localMediaError}
+                    </div>
+                  )}
+                  {!isCameraEnabled && <span style={{ position: 'absolute', fontSize: '2rem' }}>Camera Off</span>}
+                  {!localStreamRef.current && !localMediaError && <span style={{ position: 'absolute', fontSize: '2rem' }}>Starting camera...</span>}
                   <div style={{ position: 'absolute', bottom: '10px', left: '10px', background: 'rgba(0,0,0,0.8)', padding: '5px 10px', borderRadius: '6px', color: '#fff', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px', border: '1px solid #374151' }}>
                     {isSkillReviewSession(activeSession) ? <><span style={{fontSize:'1rem'}}>👨‍🏫</span> <span>Teacher (You)</span></> : viewMode === 'learning' ? <><span style={{fontSize:'1rem'}}>🎓</span> <span>Learner (You)</span></> : <><span style={{fontSize:'1rem'}}>👑</span> <span>Host (You)</span></>}
                   </div>
@@ -894,7 +1243,13 @@ const Dashboard = () => {
               </div>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #374151' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #374151', gap: '12px', flexWrap: 'wrap' }}>
+              <button onClick={toggleMicrophone} disabled={!localStreamRef.current} style={{ background: isMicEnabled ? '#374151' : '#7f1d1d', color: '#fff', border: 'none', padding: '15px 20px', borderRadius: '8px', cursor: localStreamRef.current ? 'pointer' : 'not-allowed', fontWeight: 'bold', fontSize: '1rem', opacity: localStreamRef.current ? 1 : 0.55 }}>
+                {isMicEnabled ? 'Mute Mic' : 'Unmute Mic'}
+              </button>
+              <button onClick={toggleCamera} disabled={!localStreamRef.current} style={{ background: isCameraEnabled ? '#374151' : '#7f1d1d', color: '#fff', border: 'none', padding: '15px 20px', borderRadius: '8px', cursor: localStreamRef.current ? 'pointer' : 'not-allowed', fontWeight: 'bold', fontSize: '1rem', opacity: localStreamRef.current ? 1 : 0.55 }}>
+                {isCameraEnabled ? 'Turn Off Camera' : 'Turn On Camera'}
+              </button>
               <button onClick={handleEndVideo} style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '15px 30px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
                 {isSkillReviewSession(activeSession) ? 'End Review' : '📞 End Class'}
               </button>
